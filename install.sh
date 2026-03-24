@@ -64,10 +64,10 @@ verify_checksum() {
         return 1
     fi
 
-    if command -v sha256sum &>/dev/null; then
-        echo "$expected_line" | sha256sum -c --quiet
-    elif command -v shasum &>/dev/null; then
+    if command -v shasum &>/dev/null; then
         echo "$expected_line" | shasum -a 256 -c --quiet
+    elif command -v sha256sum &>/dev/null; then
+        echo "$expected_line" | sha256sum -c --quiet
     else
         echo "[경고] sha256sum/shasum을 찾을 수 없어 체크섬 검증을 건너뜁니다"
         return 0
