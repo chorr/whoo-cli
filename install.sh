@@ -125,11 +125,58 @@ main() {
     echo "[완료] ${INSTALL_DIR}/${BINARY_NAME} 에 설치됨"
 
     # PATH 확인
-    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+    if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
         echo ""
-        echo "[주의] ${INSTALL_DIR} 이 PATH에 없습니다"
-        echo "  셸 설정에 다음을 추가하세요:"
-        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+        echo "실행: whooing"
+    else
+        # 셸 설정 파일 감지
+        local shell_name rc_file=""
+        shell_name="$(basename "${SHELL:-/bin/bash}")"
+
+        case "$shell_name" in
+            bash)
+                if [ "$(uname -s)" = "Darwin" ]; then
+                    # macOS: 로그인 셸 → .bash_profile 우선
+                    for f in "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+                        [ -f "$f" ] && { rc_file="$f"; break; }
+                    done
+                    rc_file="${rc_file:-$HOME/.bash_profile}"
+                else
+                    # Linux: 비로그인 셸 → .bashrc 우선
+                    for f in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+                        [ -f "$f" ] && { rc_file="$f"; break; }
+                    done
+                    rc_file="${rc_file:-$HOME/.bashrc}"
+                fi
+                ;;
+            zsh)
+                local zdot="${ZDOTDIR:-$HOME}"
+                if [ "$(uname -s)" = "Darwin" ]; then
+                    rc_file="${zdot}/.zprofile"
+                else
+                    rc_file="${zdot}/.zshrc"
+                fi
+                ;;
+            fish)
+                rc_file="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+                ;;
+            *)
+                rc_file="$HOME/.profile"
+                ;;
+        esac
+
+        echo ""
+        echo "[주의] PATH 설정이 필요합니다"
+        echo ""
+        if [ "$shell_name" = "fish" ]; then
+            echo "  다음을 ${rc_file} 에 추가하세요:"
+            echo "    fish_add_path ${INSTALL_DIR}"
+        else
+            echo "  다음을 ${rc_file} 에 추가하세요:"
+            echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
+        fi
+        echo ""
+        echo "  적용: source ${rc_file}"
     fi
 }
 
