@@ -9,6 +9,7 @@ set -euo pipefail
 REPO="chorr/whoo-cli"
 BINARY_NAME="whooing"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+TMP_DIR=""
 
 # OS/아키텍처 감지
 detect_platform() {
@@ -75,7 +76,6 @@ verify_checksum() {
 
 main() {
     local version platform archive_name download_url checksums_url
-    local tmp_dir
 
     # 버전 결정
     version="${1:-}"
@@ -96,31 +96,31 @@ main() {
     checksums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
 
     # 임시 디렉토리
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
 
     # 다운로드
     echo "[정보] 다운로드 중... ${archive_name}"
-    if ! curl -fsSL "$download_url" -o "${tmp_dir}/${archive_name}"; then
+    if ! curl -fsSL "$download_url" -o "${TMP_DIR}/${archive_name}"; then
         echo "[오류] 다운로드 실패: ${download_url}"
         exit 1
     fi
 
-    if ! curl -fsSL "$checksums_url" -o "${tmp_dir}/checksums.txt"; then
+    if ! curl -fsSL "$checksums_url" -o "${TMP_DIR}/checksums.txt"; then
         echo "[오류] 체크섬 파일 다운로드 실패"
         exit 1
     fi
 
     # 체크섬 검증
     echo "[정보] 체크섬 검증 중..."
-    (cd "$tmp_dir" && verify_checksum "$archive_name" "checksums.txt")
+    (cd "$TMP_DIR" && verify_checksum "$archive_name" "checksums.txt")
 
     # 압축 해제
-    tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir"
+    tar -xzf "${TMP_DIR}/${archive_name}" -C "$TMP_DIR"
 
     # 설치
     mkdir -p "$INSTALL_DIR"
-    mv "${tmp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    mv "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
     echo "[완료] ${INSTALL_DIR}/${BINARY_NAME} 에 설치됨"
 
