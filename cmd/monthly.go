@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"whoo-cli/api"
 	"whoo-cli/config"
@@ -34,6 +35,8 @@ func RunMonthly(cfg *config.Config, args []string) {
 		runMonthlyDelete(cfg, args[1:])
 	case "sort":
 		runMonthlySort(cfg, args[1:])
+	case "pay", "use":
+		runMonthlyPay(cfg, args[1:])
 	case "help", "--help", "-h":
 		showMonthlyHelp()
 	default:
@@ -198,6 +201,88 @@ func runMonthlySort(cfg *config.Config, args []string) {
 	printJSON(data)
 }
 
+// runMonthlyPay는 월별입력을 실제 거래로 확정(결제 입력)
+// 공식 API에 pay 엔드포인트는 없고 CreateEntry로 처리한다.
+func runMonthlyPay(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("monthly pay", flag.ExitOnError)
+	slot := fs.String("slot", "slot1", "슬롯 (slot1/slot2/slot3)")
+	money := fs.Int64("money", 0, "금액 덮어쓰기 (0=항목 기본값)")
+	memo := fs.String("memo", "", "메모")
+	date := fs.String("date", "", "거래일 YYYYMMDD (기본: due_date, 없으면 오늘)")
+	if err := fs.Parse(args); err != nil {
+		return
+	}
+	if fs.NArg() < 1 {
+		PrintError("item_id 필요: monthly pay [--slot slot1] <item_id> [옵션]")
+		os.Exit(1)
+	}
+	itemID := fs.Arg(0)
+
+	client := NewClient(cfg)
+	raw, err := client.GetMonthlyItemsSlot(cfg.SectionID, *slot)
+	if err != nil {
+		PrintError("월별입력 조회 실패: %v", err)
+		os.Exit(1)
+	}
+	mi := findMonthlyItemByID(raw, itemID)
+	if mi == nil {
+		PrintError("item_id '%s'를 찾을 수 없습니다", itemID)
+		os.Exit(1)
+	}
+
+	useMoney := *money
+	if useMoney == 0 {
+		useMoney = mi.Money
+	}
+	useDate := *date
+	if useDate == "" {
+		useDate = mi.DueDate
+	}
+	if len(useDate) != 8 {
+		useDate = time.Now().Format("20060102")
+	}
+
+	entry, err := client.CreateEntry(
+		cfg.SectionID, useDate,
+		mi.LAccount, mi.LAccountID, mi.RAccount, mi.RAccountID,
+		mi.Item, *memo, float64(useMoney),
+	)
+	if err != nil {
+		PrintError("거래 생성 실패: %v", err)
+		os.Exit(1)
+	}
+	out, _ := marshalPretty(entry)
+	fmt.Println(string(out))
+}
+
+type monthlyItemInfo struct {
+	Item       string
+	Money      int64
+	LAccount   string
+	LAccountID string
+	RAccount   string
+	RAccountID string
+	DueDate    string
+}
+
+func findMonthlyItemByID(raw []byte, itemID string) *monthlyItemInfo {
+	for _, m := range extractWhooingItemMaps(raw) {
+		if whooingItemID(m) != itemID {
+			continue
+		}
+		return &monthlyItemInfo{
+			Item:       mapString(m, "item"),
+			Money:      mapInt64(m, "money"),
+			LAccount:   mapString(m, "l_account"),
+			LAccountID: mapString(m, "l_account_id"),
+			RAccount:   mapString(m, "r_account"),
+			RAccountID: mapString(m, "r_account_id"),
+			DueDate:    mapString(m, "due_date"),
+		}
+	}
+	return nil
+}
+
 func showMonthlyHelp() {
 	fmt.Print(`월별입력 관리
 
@@ -213,12 +298,16 @@ func showMonthlyHelp() {
   edit   [--slot slot1] <item_id> [옵션]          월별입력 항목 수정
   delete [--slot slot1] <item_id>                월별입력 항목 삭제
   sort   [--slot slot1] <id1,id2,id3>            순서 변경
+  pay    [--slot slot1] <item_id> [--money N]
+         [--memo <메모>] [--date YYYYMMDD]        결제 입력 (entries 생성)
+         (단축: use)
 
 예시:
   whoo monthly list
   whoo monthly add --item "통신비" --money 79200 --pay-date 27 \
     --skip-holiday after --l-account expenses --l-id x1 \
     --r-account liabilities --r-id x3
+  whoo monthly pay m113769
   whoo monthly edit m1 --money 85000
   whoo monthly delete m1
 `)

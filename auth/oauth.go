@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"whoo-cli/config"
@@ -53,10 +54,13 @@ func (o *OAuth) RequestToken() (*RequestTokenResponse, error) {
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/app_auth/request_token?app_id=%s&app_secret=%s",
-		baseURL, appID, appSecret)
+	q := url.Values{}
+	q.Set("app_id", appID)
+	q.Set("app_secret", appSecret)
+	reqURL := fmt.Sprintf("%s/app_auth/request_token?%s", baseURL, q.Encode())
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("토큰 요청 실패: %w", err)
 	}
@@ -75,13 +79,18 @@ func (o *OAuth) RequestToken() (*RequestTokenResponse, error) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("응답 파싱 실패: %w", err)
 	}
+	if result.Token == "" || result.Signiture == "" {
+		return nil, fmt.Errorf("토큰 응답이 비어 있습니다")
+	}
 
 	return &result, nil
 }
 
 // GetAuthorizationURL는 2단계: 사용자가 접속할 인증 URL 반환
 func (o *OAuth) GetAuthorizationURL(token string) string {
-	return fmt.Sprintf("%s/app_auth/authorize?token=%s", baseURL, token)
+	q := url.Values{}
+	q.Set("token", token)
+	return fmt.Sprintf("%s/app_auth/authorize?%s", baseURL, q.Encode())
 }
 
 // ExchangeToken는 3단계: PIN으로 최종 토큰 교환
@@ -97,11 +106,16 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/app_auth/access_token?app_id=%s&app_secret=%s&token=%s&signiture=%s&pin=%s",
-		baseURL, appID, appSecret, tempToken, signiture, pin)
+	q := url.Values{}
+	q.Set("app_id", appID)
+	q.Set("app_secret", appSecret)
+	q.Set("token", tempToken)
+	q.Set("signiture", signiture)
+	q.Set("pin", pin)
+	reqURL := fmt.Sprintf("%s/app_auth/access_token?%s", baseURL, q.Encode())
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("토큰 교환 실패: %w", err)
 	}
@@ -128,6 +142,9 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("응답 파싱 실패: %w", err)
 	}
+	if result.Token == "" || result.TokenSecret == "" {
+		return nil, fmt.Errorf("액세스 토큰 응답이 비어 있습니다 (PIN을 확인하세요)")
+	}
 
 	return &result, nil
 }
@@ -135,6 +152,9 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 // CompleteAuth는 전체 인증 플로우 완료 후 설정 저장
 // token과 token_secret을 저장 (signiture는 ComputeSigniture()로 계산)
 func (o *OAuth) CompleteAuth(token, tokenSecret string) error {
+	if token == "" || tokenSecret == "" {
+		return fmt.Errorf("빈 토큰은 저장할 수 없습니다")
+	}
 	o.config.Token = token
 	o.config.TokenSecret = tokenSecret
 	return o.config.Save()

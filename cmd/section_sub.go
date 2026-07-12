@@ -63,6 +63,7 @@ type sectionSubModel struct {
 	cfg         *config.Config
 	client      *api.WhooingClient
 	errMsg      string
+	fromHub     bool // 섹션 허브에서 진입 시 Esc → 허브 복귀
 }
 
 const (
@@ -141,18 +142,18 @@ func (m *sectionSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if GlobalAction(msg) == ActionQuit {
 			return m, tea.Quit
 		}
-		// 에러/로딩 상태: enter/esc/q 모두 메뉴 복귀
+		// 에러/로딩 상태: 섹션 미선택이면 종료, 아니면 상위 복귀
 		if m.state != sectionStateSelecting {
 			switch ErrorAction(msg) {
-			case ActionBack, ActionExit:
-				return m, func() tea.Msg { return backToMenuMsg{} }
+			case ActionBack:
+				return m, m.leaveCmd()
 			}
 			return m, nil
 		}
 		// 선택 상태: 목록 키맵 적용
 		switch ListAction(msg) {
-		case ActionBack, ActionExit:
-			return m, func() tea.Msg { return backToMenuMsg{} }
+		case ActionBack:
+			return m, m.leaveCmd()
 		case ActionConfirm:
 			return m, m.selectSection()
 		}
@@ -168,6 +169,18 @@ func (m *sectionSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// leaveCmd는 Esc 시 복귀 대상 결정
+// 섹션 미선택: 종료 / 허브 진입: 허브 / 그 외: 메인 메뉴
+func (m *sectionSubModel) leaveCmd() tea.Cmd {
+	if m.cfg.SectionID == "" {
+		return tea.Quit
+	}
+	if m.fromHub {
+		return func() tea.Msg { return backToSectionHubMsg{} }
+	}
+	return func() tea.Msg { return backToMenuMsg{} }
+}
+
 func (m *sectionSubModel) selectSection() tea.Cmd {
 	selectedSection := m.sections[m.sectionList.Index()]
 	m.cfg.SectionID = selectedSection.SectionID
@@ -176,8 +189,8 @@ func (m *sectionSubModel) selectSection() tea.Cmd {
 		m.errMsg = fmt.Sprintf("섹션 저장 실패: %v", err)
 		return nil
 	}
-	cfg, _ := config.Load()
-	return func() tea.Msg { return sectionSelectedMsg{cfg: cfg} }
+	// Save가 m.cfg를 이미 갱신함 — 재로드 실패로 nil 전달 방지
+	return func() tea.Msg { return sectionSelectedMsg{cfg: m.cfg} }
 }
 
 func (m *sectionSubModel) View() string {
@@ -191,11 +204,23 @@ func (m *sectionSubModel) View() string {
 	case sectionStateSelecting:
 		content.WriteString(headerStyle.Render("사용 가능한 섹션:") + "\n\n")
 		content.WriteString(m.sectionList.View() + "\n")
-		content.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 번호 선택  [Enter] 확인  [Esc/q] 취소") + "\n")
+		cancelHelp := "[Esc] 메뉴"
+		if m.cfg.SectionID == "" {
+			cancelHelp = "[Esc] 종료"
+		} else if m.fromHub {
+			cancelHelp = "[Esc] 뒤로"
+		}
+		content.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 번호 선택  [Enter] 확인  "+cancelHelp) + "\n")
 
 	case sectionStateError:
 		content.WriteString(errorStyle.Render("[오류] "+m.errMsg) + "\n\n")
-		content.WriteString(helpStyle.Render("[Esc/q] 취소") + "\n")
+		errHelp := "[Esc] 메뉴"
+		if m.cfg.SectionID == "" {
+			errHelp = "[Esc] 종료"
+		} else if m.fromHub {
+			errHelp = "[Esc] 뒤로"
+		}
+		content.WriteString(helpStyle.Render(errHelp) + "\n")
 	}
 
 	return content.String()

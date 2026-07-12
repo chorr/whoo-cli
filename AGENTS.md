@@ -194,6 +194,6 @@ checksums.txt
 - 설정 파일: `~/.config/whoo-cli/config.json`
 - Config 저장 항목: `token`, `token_secret`, `section_id`
 - OAuth PIN 방식: RequestToken → Authorize → ExchangeToken
-- TUI 메인 메뉴: 거래내역, 거래 입력, 자산/부채, 섹션 변경, 사용자 정보, 섹션 관리, 항목 관리, 흐름 분석, 카드 관리, 예산·목표
+- TUI 메인 메뉴: 거래내역, 거래 입력, 자산/부채, 섹션 변경, 사용자 정보, 섹션 관리, 항목 관리, 흐름 분석, 카드 관리, 예산/목표
 - CLI 모드: API 응답 raw JSON pretty-print (`.json` 포맷 사용)
 - CLI 구현 상세: `docs/dev-cli-guide.md`

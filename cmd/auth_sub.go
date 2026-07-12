@@ -109,9 +109,8 @@ func (m *authSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.state = authStateSuccess
-		// 설정 다시 로드
-		cfg, _ := config.Load()
-		return m, func() tea.Msg { return authCompleteMsg{cfg: cfg} }
+		// CompleteAuth가 m.cfg(동일 포인터)를 이미 갱신함 — 재로드 실패로 nil 전달 방지
+		return m, func() tea.Msg { return authCompleteMsg{cfg: m.cfg} }
 
 	case authErrMsg:
 		m.state = authStateError
@@ -119,7 +118,7 @@ func (m *authSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC:
+		case tea.KeyCtrlC, tea.KeyEscape:
 			return m, tea.Quit
 		case tea.KeyEnter:
 			if m.state == authStateWaitingForPIN {

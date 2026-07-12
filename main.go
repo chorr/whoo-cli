@@ -57,6 +57,8 @@ func main() {
 		cmd.RunCheckcard(cfg, os.Args[2:])
 	case "status":
 		cmd.RunStatus(cfg)
+	case "version", "--version", "-v":
+		cmd.ShowVersion()
 	case "help", "--help", "-h":
 		cmd.ShowHelp()
 	default:

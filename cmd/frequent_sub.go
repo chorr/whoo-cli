@@ -91,13 +91,19 @@ type frequentSubModel struct {
 	textInput      string
 }
 
-func newFrequentSubModel(cfg *config.Config) *frequentSubModel {
+func newFrequentSubModel(cfg *config.Config, slotIndex int) *frequentSubModel {
+	slots := []string{"slot1", "slot2", "slot3"}
 	return &frequentSubModel{
-		cfg:    cfg,
-		client: NewClient(cfg),
-		mode:   frequentModeSlotSelect,
-		slots:  []string{"slot1", "slot2", "slot3"},
+		cfg:        cfg,
+		client:     NewClient(cfg),
+		mode:       frequentModeSlotSelect,
+		slots:      slots,
+		slotCursor: clampIndex(slotIndex, len(slots)),
 	}
+}
+
+func (m *frequentSubModel) slotIndex() int {
+	return m.slotCursor
 }
 
 // ─── 비동기 커맨드 ──────────────────────────────────────────────
@@ -157,7 +163,8 @@ func (m *frequentSubModel) buildFreqList(items []frequentItem) list.Model {
 	for i, it := range items {
 		listItems[i] = frequentListItem{item: it}
 	}
-	return newPlainList(listItems, 60, len(listItems)+2)
+	h := listViewportHeight(0, 8, len(listItems))
+	return newCompactList(listItems, 60, h)
 }
 
 // ─── BubbleTea ────────────────────────────────────────────────
@@ -211,7 +218,7 @@ func (m *frequentSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFormKey(msg)
 	case frequentModeError:
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 	}
@@ -219,22 +226,16 @@ func (m *frequentSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *frequentSubModel) handleSlotKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch HorizontalSelectAction(msg) {
-	case ActionBack, ActionExit:
+	r := handleVerticalMenuKey(msg, m.slotCursor, len(m.slots))
+	m.slotCursor = r.Cursor
+	if r.Back {
 		return m, func() tea.Msg { return backToMenuMsg{} }
-	case ActionConfirm:
+	}
+	if r.Confirm {
 		slot := m.slots[m.slotCursor]
 		m.activeSlot = slot
 		m.mode = frequentModeLoading
 		return m, m.loadItems(slot)
-	case ActionMoveLeft:
-		if m.slotCursor > 0 {
-			m.slotCursor--
-		}
-	case ActionMoveRight:
-		if m.slotCursor < len(m.slots)-1 {
-			m.slotCursor++
-		}
 	}
 	return m, nil
 }
@@ -272,8 +273,6 @@ func (m *frequentSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = frequentModeConfirmDelete
 		}
 		return m, nil
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	}
 	// 도메인 전용: a = 추가
 	if msg.String() == "a" {
@@ -288,6 +287,11 @@ func (m *frequentSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.formRAccountID = ""
 		m.textInput = ""
 		m.mode = frequentModeAdd
+		return m, nil
+	}
+	// 번호 점프
+	if idx, _, ok := handleListNumberJump(msg, len(m.items), false); ok {
+		m.freqList.Select(idx)
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -315,12 +319,12 @@ func (m *frequentSubModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 }
 
 func (m *frequentSubModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// raw Key handling to match account_manage_sub.go exactly (FormAction would steal 'q' as Exit for text input)
+	// raw Key handling to match account_manage_sub.go exactly (FormAction uses esc only; q is a typeable rune)
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit // unreachable (GlobalAction catches ctrl+c in Update before handleKey); kept for exact structural match to account_manage_sub.go handleFormKey
 	case tea.KeyEscape:
-		// full reset (editingID + forms + feedback) on cancel; esc only (not q) so 'q' is typeable rune
+		// full reset (editingID + forms + feedback) on cancel; esc only so 'q' remains typeable in forms
 		m.editingID = ""
 		m.formStep = frequentFormStepItem
 		m.formItem = ""
@@ -447,14 +451,8 @@ func (m *frequentSubModel) View() string {
 	switch m.mode {
 	case frequentModeSlotSelect:
 		b.WriteString(headerStyle.Render("슬롯 선택") + "\n\n")
-		for i, s := range m.slots {
-			if i == m.slotCursor {
-				b.WriteString(selectedStyle.Render("> "+s) + "\n")
-			} else {
-				b.WriteString("  " + s + "\n")
-			}
-		}
-		b.WriteString("\n" + helpStyle.Render("[←/→/h/l] 이동  [Enter] 선택  [Esc/q] 뒤로"))
+		b.WriteString(renderNumberedMenuLines(m.slots, m.slotCursor))
+		b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(len(m.slots))))
 
 	case frequentModeLoading:
 		b.WriteString("불러오는 중...")
@@ -469,7 +467,7 @@ func (m *frequentSubModel) View() string {
 		} else {
 			b.WriteString(m.freqList.View() + "\n")
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Enter] 거래생성  [a] 추가  [e] 수정  [d] 삭제  [Esc] 슬롯선택  [q] 메뉴")) // note: Enter for use; a/e order matches monthly list help
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 점프  [Enter] 거래생성  [a] 추가  [e] 수정  [d] 삭제  [Esc] 슬롯선택"))
 
 	case frequentModeAdd:
 		b.WriteString(headerStyle.Render(fmt.Sprintf("자주입력 추가 [%s]", m.activeSlot)) + "\n\n")
@@ -506,45 +504,20 @@ func (m *frequentSubModel) View() string {
 }
 
 // parseFrequentItemsFromRaw는 raw API 응답에서 자주입력 항목 목록 파싱
+// 실제 응답: results(또는 results.slotN)가 배열이 아니라 item_id 키 맵인 경우가 대부분.
 func parseFrequentItemsFromRaw(raw []byte) []frequentItem {
-	var wrapper map[string]interface{}
-	if err := parseJSONResponse(raw, &wrapper); err != nil {
-		return nil
-	}
-
-	var root map[string]interface{}
-	if r, ok := wrapper["results"]; ok {
-		if rm, ok := r.(map[string]interface{}); ok {
-			root = rm
-		}
-	}
-	if root == nil {
-		root = wrapper
-	}
-
-	var items []frequentItem
-	for _, v := range root {
-		arr, ok := v.([]interface{})
-		if !ok {
-			continue
-		}
-		for _, elem := range arr {
-			m, ok := elem.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			fi := frequentItem{}
-			fi.ID, _ = m["frequent_item_id"].(string)
-			fi.Item, _ = m["item"].(string)
-			fi.LAccount, _ = m["l_account"].(string)
-			fi.LAccountID, _ = m["l_account_id"].(string)
-			fi.RAccount, _ = m["r_account"].(string)
-			fi.RAccountID, _ = m["r_account_id"].(string)
-			if mv, ok := m["money"].(float64); ok {
-				fi.Money = int64(mv)
-			}
-			items = append(items, fi)
-		}
+	maps := extractWhooingItemMaps(raw)
+	items := make([]frequentItem, 0, len(maps))
+	for _, m := range maps {
+		items = append(items, frequentItem{
+			ID:         whooingItemID(m),
+			Item:       mapString(m, "item"),
+			Money:      mapInt64(m, "money"),
+			LAccount:   mapString(m, "l_account"),
+			LAccountID: mapString(m, "l_account_id"),
+			RAccount:   mapString(m, "r_account"),
+			RAccountID: mapString(m, "r_account_id"),
+		})
 	}
 	return items
 }

@@ -49,8 +49,10 @@ type cardEntry struct {
 
 // cardMonthRow는 월별 청구 행
 type cardMonthRow struct {
-	YM    string // "202601"
-	Money int64
+	YM           string // "202601" (청구월)
+	Money        int64
+	StartUseDate int // 사용기간 시작 YYYYMMDD (드릴다운용)
+	EndUseDate   int // 사용기간 종료 YYYYMMDD
 }
 
 // cardDrillEntry는 드릴다운 거래 항목
@@ -87,14 +89,15 @@ func (d cardListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	if ci.entry.UrgentPay {
 		urgentMark = confirmStyle.Render(" [결제임박]")
 	}
-	line := fmt.Sprintf(" %d. %-22s", ci.index+1, ci.entry.Title)
+	// 메인 메뉴와 동일: 1-9 이후 a,b,c…
+	line := fmt.Sprintf(" %s. %-22s", itemShortcutLabel(index), ci.entry.Title)
 	if ci.entry.Category == "creditcard" && ci.entry.PayDate > 0 {
 		line += fmt.Sprintf("  결제일 %2d일", ci.entry.PayDate)
 	}
 	if index == m.Index() {
 		fmt.Fprint(w, selectedStyle.Render(">"+line)+urgentMark)
 	} else {
-		fmt.Fprint(w, " "+line+urgentMark)
+		fmt.Fprint(w, "  "+line+urgentMark)
 	}
 }
 
@@ -124,17 +127,23 @@ type cardSubModel struct {
 	drillYM      string // 드릴다운 중인 연월
 }
 
-func newCardSubModel(cfg *config.Config) *cardSubModel {
+func newCardSubModel(cfg *config.Config, tabIndex int) *cardSubModel {
 	tabItems := []list.Item{
 		simpleItem{"신용카드"},
 		simpleItem{"체크카드"},
 	}
-	return &cardSubModel{
+	m := &cardSubModel{
 		cfg:     cfg,
 		client:  NewClient(cfg),
 		mode:    cardModeTabSelect,
 		tabList: newCompactList(tabItems, 30, len(tabItems)+2),
 	}
+	selectListIndex(&m.tabList, tabIndex)
+	return m
+}
+
+func (m *cardSubModel) tabIndex() int {
+	return m.tabList.Index()
 }
 
 func (m *cardSubModel) buildCardList(cards []cardEntry) list.Model {
@@ -142,7 +151,9 @@ func (m *cardSubModel) buildCardList(cards []cardEntry) list.Model {
 	for i, c := range cards {
 		items[i] = cardListItem{entry: c, index: i}
 	}
-	return newCompactListWith(items, cardListDelegate{}, 60, len(items)+2)
+	// 화면 넘침 방지: 뷰포트 높이 제한 (스크롤 가능)
+	h := listViewportHeight(0, 8, len(items))
+	return newCompactListWith(items, cardListDelegate{}, 60, h)
 }
 
 // ─── 비동기 메시지 ────────────────────────────────────────────
@@ -198,32 +209,39 @@ func (m *cardSubModel) loadTable(card cardEntry) tea.Cmd {
 	}
 }
 
-func (m *cardSubModel) loadDrilldown(card cardEntry, ym string) tea.Cmd {
+func (m *cardSubModel) loadDrilldown(card cardEntry, row cardMonthRow) tea.Cmd {
 	return func() tea.Msg {
-		ymInt := 0
-		fmt.Sscanf(ym, "%d", &ymInt)
-		startDate := ymInt * 100  // YYYYMM01
-		endDate := ymInt*100 + 31 // YYYYMM31 (서버가 실제 말일로 처리)
+		// 사용기간이 있으면 청구월이 아니라 사용기간으로 조회 (카드 청구 주기)
+		startDate := row.StartUseDate
+		endDate := row.EndUseDate
+		if startDate <= 0 || endDate <= 0 {
+			ymInt := 0
+			fmt.Sscanf(row.YM, "%d", &ymInt)
+			// YYYYMM → YYYYMM01 ~ YYYYMM31
+			startDate = ymInt*100 + 1
+			endDate = ymInt*100 + 31
+		}
 
+		// 카드 계정은 좌/우 어느 쪽이든 올 수 있음 (신용: 보통 r=liabilities)
+		// account + account_id 로 양쪽 매칭
 		q := api.EntrySearch{
 			SectionID: m.cfg.SectionID,
 			StartDate: startDate,
 			EndDate:   endDate,
 			Limit:     100,
+			AccountID: card.AccountID,
 		}
 		if card.Category == "creditcard" {
-			q.LAccountID = card.AccountID
-			q.LAccount = "liabilities"
+			q.Account = "liabilities"
 		} else {
-			q.LAccountID = card.AccountID
-			q.LAccount = "assets"
+			q.Account = "assets"
 		}
 		raw, err := m.client.SearchEntries(q)
 		if err != nil {
-			return cardDrillLoadedMsg{ym: ym, err: err}
+			return cardDrillLoadedMsg{ym: row.YM, err: err}
 		}
-		entries := parseCardDrillEntries(raw)
-		return cardDrillLoadedMsg{ym: ym, entries: entries}
+		entries := parseCardDrillEntries(raw, card.AccountID)
+		return cardDrillLoadedMsg{ym: row.YM, entries: entries}
 	}
 }
 
@@ -291,7 +309,7 @@ func (m *cardSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDrillKey(msg)
 	case cardModeError:
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 	}
@@ -300,24 +318,30 @@ func (m *cardSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *cardSubModel) handleTabKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch ListAction(msg) {
-	case ActionBack, ActionExit:
+	case ActionBack:
 		return m, func() tea.Msg { return backToMenuMsg{} }
 	case ActionConfirm:
-		tab := cardTab(m.tabList.Index())
-		m.activeTab = tab
-		m.mode = cardModeLoading
-		return m, m.loadCards(tab)
+		return m, m.enterTab(m.tabList.Index())
 	}
-	if idx, ok := NumberAction(msg); ok && idx < 2 {
-		tab := cardTab(idx)
+	if idx, confirm, ok := handleListNumberJump(msg, len(m.tabList.Items()), true); ok {
 		m.tabList.Select(idx)
-		m.activeTab = tab
-		m.mode = cardModeLoading
-		return m, m.loadCards(tab)
+		if confirm {
+			return m, m.enterTab(idx)
+		}
 	}
 	var cmd tea.Cmd
 	m.tabList, cmd = m.tabList.Update(msg)
 	return m, cmd
+}
+
+func (m *cardSubModel) enterTab(idx int) tea.Cmd {
+	if idx < 0 || idx >= 2 {
+		return nil
+	}
+	tab := cardTab(idx)
+	m.activeTab = tab
+	m.mode = cardModeLoading
+	return m.loadCards(tab)
 }
 
 func (m *cardSubModel) handleCardListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -331,13 +355,15 @@ func (m *cardSubModel) handleCardListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = cardModeLoading
 			return m, m.loadTable(card)
 		}
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	}
-	if idx, ok := NumberAction(msg); ok && idx < len(m.cards) {
+	// 번호 바로선택 → 해당 카드 진입
+	if idx, confirm, ok := handleListNumberJump(msg, len(m.cards), true); ok {
 		m.cardList.Select(idx)
-		m.mode = cardModeLoading
-		return m, m.loadTable(m.cards[idx])
+		if confirm && idx < len(m.cards) {
+			m.mode = cardModeLoading
+			return m, m.loadTable(m.cards[idx])
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.cardList, cmd = m.cardList.Update(msg)
@@ -345,6 +371,7 @@ func (m *cardSubModel) handleCardListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *cardSubModel) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ListAction은 ↑/↓를 반환하지 않음 — 직접 처리
 	switch ListAction(msg) {
 	case ActionBack:
 		m.mode = cardModeCardList
@@ -354,18 +381,28 @@ func (m *cardSubModel) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			row := m.rows[m.rowCursor]
 			card := m.cards[m.cardList.Index()]
 			m.mode = cardModeLoading
-			return m, m.loadDrilldown(card, row.YM)
+			return m, m.loadDrilldown(card, row)
 		}
-	case ActionMoveUp:
+		return m, nil
+	}
+	switch msg.String() {
+	case "up", "k":
 		if m.rowCursor > 0 {
 			m.rowCursor--
 		}
-	case ActionMoveDown:
+	case "down", "j":
 		if m.rowCursor < len(m.rows)-1 {
 			m.rowCursor++
 		}
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
+	}
+	// 번호 점프
+	if idx, confirm, ok := handleListNumberJump(msg, len(m.rows), true); ok {
+		m.rowCursor = idx
+		if confirm && len(m.cards) > 0 {
+			card := m.cards[m.cardList.Index()]
+			m.mode = cardModeLoading
+			return m, m.loadDrilldown(card, m.rows[idx])
+		}
 	}
 	return m, nil
 }
@@ -375,16 +412,16 @@ func (m *cardSubModel) handleDrillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActionBack:
 		m.mode = cardModeMonthTable
 		return m, nil
-	case ActionMoveUp:
+	}
+	switch msg.String() {
+	case "up", "k":
 		if m.drillCursor > 0 {
 			m.drillCursor--
 		}
-	case ActionMoveDown:
+	case "down", "j":
 		if m.drillCursor < len(m.drillEntries)-1 {
 			m.drillCursor++
 		}
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	}
 	return m, nil
 }
@@ -399,7 +436,7 @@ func (m *cardSubModel) View() string {
 	case cardModeTabSelect:
 		b.WriteString(headerStyle.Render("카드 유형 선택") + "\n\n")
 		b.WriteString(m.tabList.View() + "\n")
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-2] 번호 선택  [Enter] 확인  [Esc/q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(2)))
 
 	case cardModeLoading:
 		b.WriteString(loadingStyle.Render("불러오는 중..."))
@@ -415,7 +452,12 @@ func (m *cardSubModel) View() string {
 		} else {
 			b.WriteString(m.cardList.View() + "\n")
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 번호 선택  [Enter] 확인  [Esc] 탭선택  [q] 메뉴"))
+		n := len(m.cards)
+		cardHelp := numberedMenuHelp(n)
+		if n == 0 {
+			cardHelp = "[Esc] 탭선택"
+		}
+		b.WriteString("\n" + helpStyle.Render(cardHelp))
 
 	case cardModeMonthTable:
 		card := cardEntry{}
@@ -437,7 +479,7 @@ func (m *cardSubModel) View() string {
 				}
 			}
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Enter] 거래 목록  [Esc] 카드목록  [q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 선택  [Enter] 거래 목록  [Esc] 카드목록"))
 
 	case cardModeDrilldown:
 		card := cardEntry{}
@@ -460,7 +502,7 @@ func (m *cardSubModel) View() string {
 				}
 			}
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Esc] 월별테이블  [q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Esc] 월별테이블"))
 
 	case cardModeError:
 		b.WriteString(errorStyle.Render("[오류] "+m.errMsg) + "\n\n")
@@ -508,26 +550,61 @@ func filterCardAccounts(accountsMap *api.AccountsMap, tab cardTab) []cardEntry {
 }
 
 // parseCardTableRows는 bill/checkcard API 응답에서 월별 행 파싱
+// 단일 카드: rows["202607"] = { money, start_use_date, end_use_date, ... }
+// 전체 조회: rows["202607"] = { total, accounts: { x21: { money, ... } } }
 func parseCardTableRows(raw []byte) []cardMonthRow {
 	var outer struct {
 		Results json.RawMessage `json:"results"`
 	}
-	if err := json.Unmarshal(raw, &outer); err != nil {
+	if err := json.Unmarshal(raw, &outer); err != nil || len(outer.Results) == 0 {
 		return nil
 	}
 
+	// results.rows 를 느슨하게 map[string]json.RawMessage 로 파싱
 	var results struct {
-		Rows map[string]struct {
-			Money int64 `json:"money"`
-		} `json:"rows"`
+		Rows map[string]json.RawMessage `json:"rows"`
 	}
-	if err := json.Unmarshal(outer.Results, &results); err != nil {
+	if err := json.Unmarshal(outer.Results, &results); err != nil || results.Rows == nil {
 		return nil
 	}
 
 	var rows []cardMonthRow
-	for ym, row := range results.Rows {
-		rows = append(rows, cardMonthRow{YM: ym, Money: row.Money})
+	for ym, rowRaw := range results.Rows {
+		var row struct {
+			Money        int64 `json:"money"`
+			Total        int64 `json:"total"`
+			StartUseDate int   `json:"start_use_date"`
+			EndUseDate   int   `json:"end_use_date"`
+			// 전체 조회 시 카드별 상세
+			Accounts map[string]struct {
+				Money        int64 `json:"money"`
+				StartUseDate int   `json:"start_use_date"`
+				EndUseDate   int   `json:"end_use_date"`
+			} `json:"accounts"`
+		}
+		if err := json.Unmarshal(rowRaw, &row); err != nil {
+			continue
+		}
+		money := row.Money
+		if money == 0 {
+			money = row.Total
+		}
+		// accounts 맵만 있는 경우 money 합산 (단일 카드 조회가 아닌 경우 대비)
+		if money == 0 && len(row.Accounts) > 0 {
+			for _, a := range row.Accounts {
+				money += a.Money
+				if row.StartUseDate == 0 && a.StartUseDate > 0 {
+					row.StartUseDate = a.StartUseDate
+					row.EndUseDate = a.EndUseDate
+				}
+			}
+		}
+		rows = append(rows, cardMonthRow{
+			YM:           ym,
+			Money:        money,
+			StartUseDate: row.StartUseDate,
+			EndUseDate:   row.EndUseDate,
+		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].YM > rows[j].YM // 최신순
@@ -535,28 +612,33 @@ func parseCardTableRows(raw []byte) []cardMonthRow {
 	return rows
 }
 
-// parseCardDrillEntries는 SearchEntries 응답에서 드릴다운 거래 목록 파싱
-func parseCardDrillEntries(raw []byte) []cardDrillEntry {
+// parseCardDrillEntries는 entries.json 응답(results.rows)에서 카드 관련 거래만 추출
+func parseCardDrillEntries(raw []byte, cardAccountID string) []cardDrillEntry {
 	var outer struct {
 		Results json.RawMessage `json:"results"`
 	}
-	if err := json.Unmarshal(raw, &outer); err != nil {
+	if err := json.Unmarshal(raw, &outer); err != nil || len(outer.Results) == 0 {
 		return nil
 	}
 
-	var entries []api.Entry
-	if err := json.Unmarshal(outer.Results, &entries); err != nil {
-		var wrapper struct {
-			Entries []api.Entry `json:"entries"`
-		}
-		if err2 := json.Unmarshal(outer.Results, &wrapper); err2 != nil {
-			return nil
-		}
-		entries = wrapper.Entries
+	// 표준: { "rows": [ Entry... ], "reports": [] }
+	var wrapped struct {
+		Rows []api.Entry `json:"rows"`
+	}
+	entries := []api.Entry{}
+	if err := json.Unmarshal(outer.Results, &wrapped); err == nil && wrapped.Rows != nil {
+		entries = wrapped.Rows
+	} else {
+		// 폴백: results 가 배열인 경우
+		_ = json.Unmarshal(outer.Results, &entries)
 	}
 
 	var result []cardDrillEntry
 	for _, e := range entries {
+		// account_id 필터가 서버에서 빠진 경우 클라에서 한 번 더 거름
+		if cardAccountID != "" && e.LAccountID != cardAccountID && e.RAccountID != cardAccountID {
+			continue
+		}
 		result = append(result, cardDrillEntry{
 			Date:       e.DateOnly(),
 			Item:       e.Item,

@@ -4,12 +4,15 @@
 package config
 
 import (
+	"bufio"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // 패키지 레벨 변수 - 빌드 시 ldflags로 주입 가능
@@ -19,11 +22,71 @@ var (
 	AppID string
 	// AppSecret은 후잉 앱 Secret (빌드 시 -ldflags로 주입, 또는 환경변수)
 	AppSecret string
+
+	dotenvOnce sync.Once
 )
+
+// loadDotEnv는 개발용 .env를 한 번만 읽어 os.Environ에 반영한다.
+// 이미 설정된 환경변수는 덮어쓰지 않는다.
+// 탐색 순서: 현재 작업 디렉터리/.env → ~/.config/whoo/.env
+// make run 없이도 make dev 후 ./whoo 가 동작하도록 한다.
+func loadDotEnv() {
+	dotenvOnce.Do(func() {
+		candidates := []string{".env"}
+		if home, err := os.UserHomeDir(); err == nil {
+			candidates = append(candidates, filepath.Join(home, ".config", "whoo", ".env"))
+		}
+		for _, path := range candidates {
+			if err := applyDotEnvFile(path); err == nil {
+				return // 첫 번째로 찾은 파일만 적용
+			}
+		}
+	})
+}
+
+// applyDotEnvFile은 KEY=VALUE 형식의 .env를 파싱해 미설정 환경변수만 채운다
+func applyDotEnvFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// export KEY=VALUE 허용
+		line = strings.TrimPrefix(line, "export ")
+		line = strings.TrimSpace(line)
+
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if key == "" {
+			continue
+		}
+		// 따옴표 제거
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if os.Getenv(key) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
+	return sc.Err()
+}
 
 // GetAppID는 AppID를 반환
 // 1. 빌드 시 주입된 값이 있으면 그대로 사용
-// 2. 비어있으면 환경변수 WHOOING_APP_ID에서 읽기
+// 2. 비어있으면 환경변수 WHOOING_APP_ID에서 읽기 (.env 자동 로드 포함)
 // 3. 둘 다 없으면 에러 반환
 func GetAppID() (string, error) {
 	// 빌드 시 주입된 값 확인
@@ -31,18 +94,20 @@ func GetAppID() (string, error) {
 		return AppID, nil
 	}
 
+	loadDotEnv()
+
 	// 환경변수에서 읽기
 	id := os.Getenv("WHOOING_APP_ID")
 	if id != "" {
 		return id, nil
 	}
 
-	return "", fmt.Errorf("app_id가 설정되지 않았습니다. WHOOING_APP_ID 환경변수를 설정하거나, -ldflags로 빌드하세요")
+	return "", fmt.Errorf("app_id가 설정되지 않았습니다. 프로젝트 .env 또는 WHOOING_APP_ID 환경변수를 설정하거나, -ldflags로 빌드하세요")
 }
 
 // GetAppSecret는 AppSecret을 반환
 // 1. 빌드 시 주입된 값이 있으면 그대로 사용
-// 2. 비어있으면 환경변수 WHOOING_APP_SECRET에서 읽기
+// 2. 비어있으면 환경변수 WHOOING_APP_SECRET에서 읽기 (.env 자동 로드 포함)
 // 3. 둘 다 없으면 에러 반환
 func GetAppSecret() (string, error) {
 	// 빌드 시 주입된 값 확인
@@ -50,13 +115,15 @@ func GetAppSecret() (string, error) {
 		return AppSecret, nil
 	}
 
+	loadDotEnv()
+
 	// 환경변수에서 읽기
 	secret := os.Getenv("WHOOING_APP_SECRET")
 	if secret != "" {
 		return secret, nil
 	}
 
-	return "", fmt.Errorf("app_secret이 설정되지 않았습니다. WHOOING_APP_SECRET 환경변수를 설정하거나, -ldflags로 빌드하세요")
+	return "", fmt.Errorf("app_secret이 설정되지 않았습니다. 프로젝트 .env 또는 WHOOING_APP_SECRET 환경변수를 설정하거나, -ldflags로 빌드하세요")
 }
 
 // Config는 후잉 CLI의 설정을 저장하는 구조체

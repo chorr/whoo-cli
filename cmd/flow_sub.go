@@ -38,12 +38,14 @@ var flowAnalysisLabels = []struct {
 	typ   flowAnalysisType
 	label string
 }{
-	{flowTypeFlowAccount, "계정 흐름 (flow_of_account)"},
-	{flowTypeFlowAccountID, "항목 흐름 (flow_of_account_id)"},
-	{flowTypeChangesAccID, "항목 일일 변동 (changes_of_account_id)"},
-	{flowTypeChangesClient, "거래처 일일 변동 (changes_of_client)"},
-	{flowTypeChangesItem, "아이템 일일 변동 (changes_of_item)"},
+	{flowTypeFlowAccount, "계정 흐름"},
+	{flowTypeFlowAccountID, "항목 흐름"},
+	{flowTypeChangesAccID, "항목 일일 변동"},
+	{flowTypeChangesClient, "거래처 일일 변동"},
+	{flowTypeChangesItem, "아이템 일일 변동"},
 }
+
+const flowResultViewport = 18
 
 type flowSubModel struct {
 	cfg    *config.Config
@@ -52,7 +54,7 @@ type flowSubModel struct {
 	errMsg string
 
 	// 선택
-	typeCursor int
+	typeCursor   int
 	analysisType flowAnalysisType
 
 	// 파라미터 입력
@@ -62,8 +64,10 @@ type flowSubModel struct {
 	paramExtra string // account / account_id / client / item
 	textInput  string
 
-	// 결과
-	resultJSON []byte
+	// 결과 (렌더된 줄 + 스크롤)
+	resultLines  []string
+	resultOffset int
+	resultTitle  string
 }
 
 const (
@@ -73,12 +77,17 @@ const (
 	flowParamStepConfirm
 )
 
-func newFlowSubModel(cfg *config.Config) *flowSubModel {
+func newFlowSubModel(cfg *config.Config, typeIndex int) *flowSubModel {
 	return &flowSubModel{
-		cfg:    cfg,
-		client: NewClient(cfg),
-		mode:   flowModeSelect,
+		cfg:        cfg,
+		client:     NewClient(cfg),
+		mode:       flowModeSelect,
+		typeCursor: clampIndex(typeIndex, len(flowAnalysisLabels)),
 	}
+}
+
+func (m *flowSubModel) typeIndex() int {
+	return m.typeCursor
 }
 
 func (m *flowSubModel) Init() tea.Cmd { return nil }
@@ -86,7 +95,9 @@ func (m *flowSubModel) Init() tea.Cmd { return nil }
 func (m *flowSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case flowResultMsg:
-		m.resultJSON = msg.data
+		m.resultTitle = msg.title
+		m.resultLines = msg.lines
+		m.resultOffset = 0
 		m.mode = flowModeResult
 	case flowErrMsg:
 		m.errMsg = msg.err.Error()
@@ -100,7 +111,10 @@ func (m *flowSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-type flowResultMsg struct{ data []byte }
+type flowResultMsg struct {
+	title string
+	lines []string
+}
 type flowErrMsg struct{ err error }
 
 func (m *flowSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -110,19 +124,10 @@ func (m *flowSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case flowModeParams:
 		return m.handleParamsKey(msg)
 	case flowModeResult:
-		// esc 또는 q → 선택 화면으로 복귀
-		switch msg.Type {
-		case tea.KeyEscape:
-			m.mode = flowModeSelect
-		case tea.KeyRunes:
-			if string(msg.Runes) == "q" {
-				m.mode = flowModeSelect
-			}
-		}
+		return m.handleResultKey(msg)
 	case flowModeError:
-		// esc/q → 메뉴 복귀, enter → 선택 화면으로 복귀(재시도)
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 		if msg.Type == tea.KeyEnter {
@@ -132,44 +137,77 @@ func (m *flowSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *flowSubModel) handleSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEscape:
-		return m, func() tea.Msg { return backToMenuMsg{} }
-	case tea.KeyUp:
-		if m.typeCursor > 0 {
-			m.typeCursor--
+func (m *flowSubModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = flowModeSelect
+		m.resultLines = nil
+		m.resultOffset = 0
+		return m, nil
+	case "up", "k":
+		if m.resultOffset > 0 {
+			m.resultOffset--
 		}
-	case tea.KeyDown:
-		if m.typeCursor < len(flowAnalysisLabels)-1 {
-			m.typeCursor++
+	case "down", "j":
+		maxOff := len(m.resultLines) - flowResultViewport
+		if maxOff < 0 {
+			maxOff = 0
 		}
-	case tea.KeyEnter:
-		m.analysisType = flowAnalysisLabels[m.typeCursor].typ
-		m.mode = flowModeParams
-		m.paramStep = flowParamStepFrom
-		now := time.Now()
-		m.paramFrom = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("20060102")
-		m.paramTo = now.Format("20060102")
-		m.paramExtra = ""
-		m.textInput = m.paramFrom
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			switch msg.Runes[0] {
-			case 'k':
-				if m.typeCursor > 0 {
-					m.typeCursor--
-				}
-			case 'j':
-				if m.typeCursor < len(flowAnalysisLabels)-1 {
-					m.typeCursor++
-				}
-			case 'q':
-				return m, func() tea.Msg { return backToMenuMsg{} }
-			}
+		if m.resultOffset < maxOff {
+			m.resultOffset++
 		}
+	case "pgup", "ctrl+u":
+		m.resultOffset -= flowResultViewport
+		if m.resultOffset < 0 {
+			m.resultOffset = 0
+		}
+	case "pgdown", "ctrl+d", " ":
+		maxOff := len(m.resultLines) - flowResultViewport
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		m.resultOffset += flowResultViewport
+		if m.resultOffset > maxOff {
+			m.resultOffset = maxOff
+		}
+	case "g", "home":
+		m.resultOffset = 0
+	case "G", "end":
+		maxOff := len(m.resultLines) - flowResultViewport
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		m.resultOffset = maxOff
 	}
 	return m, nil
+}
+
+func (m *flowSubModel) handleSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	r := handleVerticalMenuKey(msg, m.typeCursor, len(flowAnalysisLabels))
+	m.typeCursor = r.Cursor
+	if r.Back {
+		return m, func() tea.Msg { return backToMenuMsg{} }
+	}
+	if r.Confirm {
+		return m, m.enterAnalysisType(m.typeCursor)
+	}
+	return m, nil
+}
+
+func (m *flowSubModel) enterAnalysisType(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(flowAnalysisLabels) {
+		return nil
+	}
+	m.typeCursor = idx
+	m.analysisType = flowAnalysisLabels[idx].typ
+	m.mode = flowModeParams
+	m.paramStep = flowParamStepFrom
+	now := time.Now()
+	m.paramFrom = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("20060102")
+	m.paramTo = now.Format("20060102")
+	m.paramExtra = ""
+	m.textInput = m.paramFrom
+	return nil
 }
 
 func (m *flowSubModel) handleParamsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -177,9 +215,7 @@ func (m *flowSubModel) handleParamsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEscape:
 		m.mode = flowModeSelect
 	case tea.KeyBackspace, tea.KeyDelete:
-		if len(m.textInput) > 0 {
-			m.textInput = m.textInput[:len(m.textInput)-1]
-		}
+		m.textInput = backspaceRunes(m.textInput)
 	case tea.KeyEnter:
 		return m.advanceParamStep()
 	case tea.KeyRunes:
@@ -200,7 +236,6 @@ func (m *flowSubModel) advanceParamStep() (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.textInput) != "" {
 			m.paramTo = strings.TrimSpace(m.textInput)
 		}
-		// 추가 파라미터가 필요한 타입인지 확인
 		if m.needsExtraParam() {
 			m.paramStep = flowParamStepExtra
 			m.textInput = ""
@@ -251,7 +286,10 @@ func (m *flowSubModel) fetchResult() tea.Cmd {
 	}
 
 	analysisType := m.analysisType
+	label := flowAnalysisLabels[m.typeCursor].label
 	client := m.client
+	sectionID := m.cfg.SectionID
+	paramFrom, paramTo, paramExtra := m.paramFrom, m.paramTo, m.paramExtra
 	m.mode = flowModeLoading
 
 	return func() tea.Msg {
@@ -272,7 +310,34 @@ func (m *flowSubModel) fetchResult() tea.Cmd {
 		if err != nil {
 			return flowErrMsg{err: err}
 		}
-		return flowResultMsg{data: data}
+
+		// 계정 이름은 실패해도 결과는 표시
+		var am *api.AccountsMap
+		if a, aerr := client.GetAccountsMap(sectionID); aerr == nil {
+			am = a
+		}
+
+		title := fmt.Sprintf("%s  %s ~ %s", label, FormatDate(paramFrom), FormatDate(paramTo))
+		if paramExtra != "" {
+			title += "  " + paramExtra
+		}
+
+		var lines []string
+		switch analysisType {
+		case flowTypeFlowAccount, flowTypeFlowAccountID:
+			groups, perr := parseFlowGroups(data)
+			if perr != nil {
+				return flowErrMsg{err: perr}
+			}
+			lines = renderFlowGroupsLines(groups, am)
+		default:
+			ch, perr := parseChangesView(data)
+			if perr != nil {
+				return flowErrMsg{err: perr}
+			}
+			lines = renderChangesLines(ch)
+		}
+		return flowResultMsg{title: title, lines: lines}
 	}
 }
 
@@ -283,32 +348,29 @@ func (m *flowSubModel) View() string {
 	switch m.mode {
 	case flowModeSelect:
 		b.WriteString(headerStyle.Render("분석 유형 선택") + "\n\n")
+		labels := make([]string, len(flowAnalysisLabels))
 		for i, item := range flowAnalysisLabels {
-			if i == m.typeCursor {
-				b.WriteString(selectedStyle.Render("> "+item.label) + "\n")
-			} else {
-				b.WriteString("  " + item.label + "\n")
-			}
+			labels[i] = item.label
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Enter] 선택  [Esc/q] 뒤로") + "\n")
+		b.WriteString(renderNumberedMenuLines(labels, m.typeCursor))
+		b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(len(flowAnalysisLabels))) + "\n")
 
 	case flowModeParams:
-		b.WriteString(headerStyle.Render(flowAnalysisLabels[m.analysisType].label) + "\n\n")
+		b.WriteString(headerStyle.Render(flowAnalysisLabels[m.typeCursor].label) + "\n\n")
 		switch m.paramStep {
 		case flowParamStepFrom:
 			b.WriteString("시작 날짜 (YYYYMMDD): " + m.textInput + "_\n")
 			b.WriteString(helpStyle.Render("[Enter] 다음  [Esc] 취소") + "\n")
 		case flowParamStepTo:
-			b.WriteString(fmt.Sprintf("시작: %s\n", m.paramFrom))
+			b.WriteString(fmt.Sprintf("시작: %s\n", FormatDate(m.paramFrom)))
 			b.WriteString("종료 날짜 (YYYYMMDD): " + m.textInput + "_\n")
 			b.WriteString(helpStyle.Render("[Enter] 다음  [Esc] 취소") + "\n")
 		case flowParamStepExtra:
-			b.WriteString(fmt.Sprintf("기간: %s ~ %s\n", m.paramFrom, m.paramTo))
-			label := m.extraParamLabel()
-			b.WriteString(label + ": " + m.textInput + "_\n")
+			b.WriteString(fmt.Sprintf("기간: %s ~ %s\n", FormatDate(m.paramFrom), FormatDate(m.paramTo)))
+			b.WriteString(m.extraParamLabel() + ": " + m.textInput + "_\n")
 			b.WriteString(helpStyle.Render("[Enter] 다음  [Esc] 취소") + "\n")
 		case flowParamStepConfirm:
-			b.WriteString(fmt.Sprintf("기간: %s ~ %s\n", m.paramFrom, m.paramTo))
+			b.WriteString(fmt.Sprintf("기간: %s ~ %s\n", FormatDate(m.paramFrom), FormatDate(m.paramTo)))
 			if m.paramExtra != "" {
 				b.WriteString(fmt.Sprintf("%s: %s\n", m.extraParamLabel(), m.paramExtra))
 			}
@@ -316,15 +378,22 @@ func (m *flowSubModel) View() string {
 		}
 
 	case flowModeLoading:
-		b.WriteString("데이터를 불러오는 중...\n")
+		b.WriteString(loadingStyle.Render("데이터를 불러오는 중...") + "\n")
 
 	case flowModeResult:
-		b.WriteString(headerStyle.Render("결과") + "\n\n")
-		// raw JSON을 그대로 표시 (pretty-print)
-		var buf strings.Builder
-		prettyPrintJSON(m.resultJSON, &buf)
-		b.WriteString(buf.String() + "\n")
-		b.WriteString("\n" + helpStyle.Render("[Esc/q] 뒤로") + "\n")
+		b.WriteString(headerStyle.Render(m.resultTitle) + "\n\n")
+		view, off := sliceViewport(m.resultLines, m.resultOffset, flowResultViewport)
+		for _, line := range view {
+			b.WriteString(line + "\n")
+		}
+		// 스크롤 위치 표시
+		if len(m.resultLines) > flowResultViewport {
+			b.WriteString("\n")
+			b.WriteString(helpStyle.Render(fmt.Sprintf("  (%d–%d / %d줄)",
+				off+1, off+len(view), len(m.resultLines))))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 스크롤  [PgUp/PgDn] 페이지  [Esc] 뒤로") + "\n")
 
 	case flowModeError:
 		b.WriteString(errorStyle.Render("[오류] "+m.errMsg) + "\n\n")
@@ -346,41 +415,4 @@ func (m *flowSubModel) extraParamLabel() string {
 		return "아이템명"
 	}
 	return "값"
-}
-
-// prettyPrintJSON은 raw JSON을 들여쓰기하여 strings.Builder에 출력
-func prettyPrintJSON(data []byte, b *strings.Builder) {
-	indent := 0
-	inString := false
-	for i := 0; i < len(data); i++ {
-		c := data[i]
-		switch {
-		case c == '"' && (i == 0 || data[i-1] != '\\'):
-			inString = !inString
-			b.WriteByte(c)
-		case inString:
-			b.WriteByte(c)
-		case c == '{' || c == '[':
-			b.WriteByte(c)
-			b.WriteByte('\n')
-			indent++
-			b.WriteString(strings.Repeat("  ", indent))
-		case c == '}' || c == ']':
-			b.WriteByte('\n')
-			indent--
-			b.WriteString(strings.Repeat("  ", indent))
-			b.WriteByte(c)
-		case c == ',':
-			b.WriteByte(c)
-			b.WriteByte('\n')
-			b.WriteString(strings.Repeat("  ", indent))
-		case c == ':':
-			b.WriteByte(c)
-			b.WriteByte(' ')
-		case c == ' ' || c == '\n' || c == '\r' || c == '\t':
-			// 공백 스킵 (이미 들여쓰기 처리)
-		default:
-			b.WriteByte(c)
-		}
-	}
 }

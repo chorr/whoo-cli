@@ -47,6 +47,7 @@ type entrySubModel struct {
 	choices   []accountChoice
 	done      bool
 	cancelled bool
+	inputHint string // 입력 검증 안내 (API 에러와 분리)
 }
 
 // accountChoice는 계정 선택지
@@ -82,7 +83,7 @@ func newEntrySubModel(cfg *config.Config) *entrySubModel {
 func newEntrySubModelForEdit(cfg *config.Config, entry api.Entry, accountsMap *api.AccountsMap) *entrySubModel {
 	return &entrySubModel{
 		cfg:          cfg,
-		client:       api.NewWhooingClient(cfg),
+		client:       NewClient(cfg),
 		accountsMap:  accountsMap,
 		step:         entryStepDate,
 		editMode:     true,
@@ -234,20 +235,22 @@ func (m *entrySubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			m.cancelled = true
-			return m, func() tea.Msg { return backToMenuMsg{} }
-		}
-		// 에러 상태에서는 Enter/ESC로 메뉴로 돌아감
+		// 에러 상태에서는 Enter/Esc로 상위 화면 복귀
 		if m.err != nil {
 			if msg.String() == "enter" || msg.String() == "esc" {
 				m.err = nil
 				m.cancelled = true
-				return m, func() tea.Msg { return backToMenuMsg{} }
+				return m, m.leaveCmd()
 			}
 			return m, nil
 		}
+		// Esc: 다른 기능과 동일 — 상위 화면으로 이탈
 		if msg.String() == "esc" {
+			m.cancelled = true
+			return m, m.leaveCmd()
+		}
+		// Ctrl+U: 폼 단계 한 칸 이전 (첫 단계에서는 무시)
+		if msg.String() == "ctrl+u" {
 			return m, m.goBack()
 		}
 
@@ -303,11 +306,20 @@ func (m *entrySubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// leaveCmd는 수정 모드면 거래내역, 신규면 메뉴로 복귀하는 커맨드
+func (m *entrySubModel) leaveCmd() tea.Cmd {
+	if m.editMode {
+		return func() tea.Msg { return backToTransactionsMsg{} }
+	}
+	return func() tea.Msg { return backToMenuMsg{} }
+}
+
+// goBack은 Ctrl+U로 호출 — 이전 입력 단계로만 이동 (이탈은 Esc)
 func (m *entrySubModel) goBack() tea.Cmd {
 	switch m.step {
 	case entryStepDate:
-		m.cancelled = true
-		return func() tea.Msg { return backToMenuMsg{} }
+		// 이미 첫 단계 — 이탈은 Esc 담당
+		return nil
 	case entryStepLAccountType:
 		m.step = entryStepDate
 		m.textInput = m.date
@@ -340,17 +352,19 @@ func (m *entrySubModel) goBack() tea.Cmd {
 }
 
 func (m *entrySubModel) updateTextInput(msg tea.KeyMsg, onSubmit func()) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
+	switch msg.Type {
+	case tea.KeyEnter:
 		onSubmit()
-	case "backspace":
-		if len(m.textInput) > 0 {
-			m.textInput = m.textInput[:len(m.textInput)-1]
-		}
-	default:
-		if len(msg.String()) == 1 {
-			m.textInput += msg.String()
-		}
+	case tea.KeyBackspace, tea.KeyDelete:
+		m.textInput = backspaceRunes(m.textInput)
+		m.inputHint = ""
+	case tea.KeyRunes:
+		// 한글 등 멀티바이트 문자 입력 지원
+		m.textInput += string(msg.Runes)
+		m.inputHint = ""
+	case tea.KeySpace:
+		m.textInput += " "
+		m.inputHint = ""
 	}
 	return m, nil
 }
@@ -415,7 +429,7 @@ func (m *entrySubModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "N", "esc":
 		// 취소
 		m.cancelled = true
-		return m, func() tea.Msg { return backToMenuMsg{} }
+		return m, m.leaveCmd()
 	}
 	return m, nil
 }
@@ -426,11 +440,14 @@ func (m *entrySubModel) submitDate() {
 		input = time.Now().Format("20060102")
 	}
 	if len(input) != 8 {
+		m.inputHint = "날짜는 YYYYMMDD 8자리로 입력하세요"
 		return
 	}
 	if _, err := time.Parse("20060102", input); err != nil {
+		m.inputHint = "잘못된 날짜입니다"
 		return
 	}
+	m.inputHint = ""
 	m.date = input
 	m.step = entryStepLAccountType
 	m.cursor = m.cursorForAccountType(m.lAccountType)
@@ -439,12 +456,20 @@ func (m *entrySubModel) submitDate() {
 func (m *entrySubModel) submitMoney() {
 	input := strings.TrimSpace(m.textInput)
 	if input == "" {
+		m.inputHint = "금액을 입력하세요"
 		return
 	}
 	cleaned := strings.ReplaceAll(input, ",", "")
-	if _, err := strconv.ParseFloat(cleaned, 64); err != nil {
+	amount, err := strconv.ParseFloat(cleaned, 64)
+	if err != nil {
+		m.inputHint = "올바른 금액을 입력하세요"
 		return
 	}
+	if amount <= 0 {
+		m.inputHint = "금액은 0보다 커야 합니다"
+		return
+	}
+	m.inputHint = ""
 	m.money = cleaned
 	m.step = entryStepItem
 	m.textInput = m.item
@@ -561,9 +586,13 @@ func (m *entrySubModel) View() string {
 }
 
 func (m *entrySubModel) renderError() string {
+	back := "메뉴로 돌아가기"
+	if m.editMode {
+		back = "거래내역으로 돌아가기"
+	}
 	return titleStyle.Render("거래 입력") + "\n\n" +
 		errorStyle.Render("[오류] "+m.err.Error()) + "\n\n" +
-		helpStyle.Render("[Enter] 메뉴로 돌아가기")
+		helpStyle.Render("[Enter/Esc] "+back)
 }
 
 func (m *entrySubModel) renderDone() string {
@@ -699,8 +728,13 @@ func (m *entrySubModel) renderForm() string {
 		}
 	}
 
+	if m.inputHint != "" {
+		b.WriteString("\n")
+		b.WriteString(errorStyle.Render(m.inputHint))
+	}
+
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("[esc] 이전  [ctrl+c] 취소"))
+	b.WriteString(dimStyle.Render("[Esc] 취소  [Ctrl+U] 이전 단계"))
 	b.WriteString("\n")
 
 	return b.String()

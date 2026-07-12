@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | ba
 특정 버전 설치:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v0.3.0
+curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v1.0.0
 ```
 
 `~/.local/bin/whoo`에 설치됩니다.
@@ -24,6 +24,7 @@ whoo
 
 # 인증/설정 상태 확인
 whoo status
+whoo version
 
 # CLI 모드 (JSON 출력)
 whoo user          # 유저 정보
@@ -42,7 +43,7 @@ whoo help          # 도움말
 3. 후잉 계정으로 로그인 후 PIN 번호 확인
 4. PIN 번호 입력
 
-인증 토큰은 `~/.config/whoo-cli/config.json`에 저장됩니다.
+인증 토큰은 `~/.config/whoo/config.json`에 저장됩니다.
 
 ## 지원 플랫폼
 

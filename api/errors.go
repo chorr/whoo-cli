@@ -21,6 +21,13 @@ func (e *APIError) Error() string {
 	if msg == "" {
 		msg = "알 수 없는 오류"
 	}
+	// 토큰 만료 시 재인증 안내
+	if e.IsTokenExpired() {
+		if e.Endpoint != "" {
+			return fmt.Sprintf("API 오류 (code=%d, endpoint=%s): %s — whoo auth 로 재인증하세요", e.Code, e.Endpoint, msg)
+		}
+		return fmt.Sprintf("API 오류 (code=%d): %s — whoo auth 로 재인증하세요", e.Code, msg)
+	}
 	if e.Endpoint != "" {
 		return fmt.Sprintf("API 오류 (code=%d, endpoint=%s): %s", e.Code, e.Endpoint, msg)
 	}

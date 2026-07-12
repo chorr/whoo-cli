@@ -23,23 +23,22 @@ const pageSize = 20
 var rangePresets = []string{"이번 달", "지난 달", "최근 3개월", "직접 입력"}
 
 // calcDateRange는 프리셋 인덱스에 따라 시작일/종료일 반환
+// 월말(3/31 등)에서도 달 경계가 깨지지 않도록 항상 해당 월 1일 기준으로 계산한다
 func calcDateRange(preset int) (string, string) {
 	now := time.Now()
+	thisMonth := firstOfMonth(now)
 	switch preset {
 	case 0: // 이번 달
-		start := fmt.Sprintf("%04d%02d01", now.Year(), now.Month())
-		end := fmt.Sprintf("%04d%02d%02d", now.Year(), now.Month(), now.Day())
+		start := thisMonth.Format("20060102")
+		end := now.Format("20060102")
 		return start, end
 	case 1: // 지난 달
-		lastMonth := now.AddDate(0, -1, 0)
-		start := fmt.Sprintf("%04d%02d01", lastMonth.Year(), lastMonth.Month())
-		lastDay := time.Date(lastMonth.Year(), lastMonth.Month()+1, 0, 0, 0, 0, 0, time.Local)
-		end := fmt.Sprintf("%04d%02d%02d", lastDay.Year(), lastDay.Month(), lastDay.Day())
-		return start, end
-	case 2: // 최근 3개월
-		threeMonthsAgo := now.AddDate(0, -3, 0)
-		start := fmt.Sprintf("%04d%02d01", threeMonthsAgo.Year(), threeMonthsAgo.Month())
-		end := fmt.Sprintf("%04d%02d%02d", now.Year(), now.Month(), now.Day())
+		lastMonthStart := thisMonth.AddDate(0, -1, 0)
+		lastMonthEnd := thisMonth.AddDate(0, 0, -1)
+		return lastMonthStart.Format("20060102"), lastMonthEnd.Format("20060102")
+	case 2: // 최근 3개월 (3개월 전 1일 ~ 오늘)
+		start := thisMonth.AddDate(0, -3, 0).Format("20060102")
+		end := now.Format("20060102")
 		return start, end
 	default:
 		return "", ""
@@ -62,7 +61,8 @@ func validateDateInput(startStr, endStr string) error {
 	if end.Before(start) {
 		return fmt.Errorf("종료일은 시작일 이후여야 합니다")
 	}
-	if end.Sub(start) > 365*24*time.Hour {
+	// 달력 기준 최대 1년 (윤년 포함)
+	if end.After(start.AddDate(1, 0, 0)) {
 		return fmt.Errorf("조회 범위는 최대 1년입니다")
 	}
 	return nil
@@ -138,7 +138,8 @@ func newTransactionsSubModel(cfg *config.Config) *transactionsSubModel {
 	tbl := table.New(
 		table.WithColumns(columns),
 		table.WithFocused(true),
-		table.WithHeight(10),
+		// 조회 단위(pageSize)와 동일하게 한 화면에 20건 표시
+		table.WithHeight(pageSize),
 		table.WithKeyMap(keys),
 	)
 
@@ -213,7 +214,7 @@ func (m *transactionsSubModel) fetchMoreEntries() tea.Cmd {
 	if len(m.entries) == 0 {
 		return nil
 	}
-	cursor := m.entries[len(m.entries)-1].EntryDate
+	cursor := string(m.entries[len(m.entries)-1].EntryDate)
 	return func() tea.Msg {
 		entries, err := m.client.GetEntries(m.cfg.SectionID, m.startDate, m.endDate, pageSize, cursor)
 		if err != nil {
@@ -250,8 +251,8 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
-			case "y", "Y", "enter":
-				// 삭제 실행 (Y가 기본값)
+			case "y", "Y":
+				// 삭제 실행 (Enter는 의도치 않은 삭제 방지로 비허용)
 				m.confirmDelete = false
 				m.deleting = true
 				return m, m.deleteEntry()
@@ -381,7 +382,7 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tableReady = false
 				m.hasMore = false
 				return m, m.fetchEntries()
-			case "esc", "q":
+			case "esc":
 				m.rangeMode = false
 				return m, nil
 			}
@@ -393,10 +394,16 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// 테이블 높이 조정 (헤더 3 + 테이블 + 합계 1 + 도움말 2 + 여백 4 = 10)
-		tableHeight := msg.Height - 10
-		if tableHeight < 3 {
-			tableHeight = 3
+		// 조회 단위(pageSize=20)를 테이블 표시 단위로 사용.
+		// 터미널이 더 작을 때만 가용 높이로 줄인다.
+		const chrome = 10 // 제목·합계·도움말·여백
+		available := msg.Height - chrome
+		if available < 3 {
+			available = 3
+		}
+		tableHeight := pageSize
+		if available < pageSize {
+			tableHeight = available
 		}
 		m.table.SetHeight(tableHeight)
 		m.table.SetWidth(msg.Width - 4)
@@ -404,7 +411,7 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "Q", "esc":
+		case "esc":
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		case "e":
 			// 수정
@@ -514,7 +521,7 @@ func (m *transactionsSubModel) renderLoading() string {
 func (m *transactionsSubModel) renderError() string {
 	return titleStyle.Render("거래 내역 조회") + "\n\n" +
 		errorStyle.Render("[오류] "+m.err.Error()) + "\n\n" +
-		helpStyle.Render("[Enter] 메뉴로 돌아가기")
+		helpStyle.Render("[Esc] 메뉴로 돌아가기")
 }
 
 func (m *transactionsSubModel) renderTransactions() string {
@@ -532,7 +539,7 @@ func (m *transactionsSubModel) renderTransactions() string {
 	// 거래 내역이 없는 경우
 	if len(m.entries) == 0 {
 		return content + "해당 기간에 거래 내역이 없습니다\n\n" +
-			helpStyle.Render("[r] 범위  [q] 메뉴로 돌아가기")
+			helpStyle.Render("[r] 범위  [Esc] 메뉴")
 	}
 
 	// 테이블
@@ -576,7 +583,7 @@ func (m *transactionsSubModel) renderTransactions() string {
 	}
 
 	// 도움말
-	help := "[↑/↓/j/k] 이동  [e] 수정  [d] 삭제  [r] 범위  [q] 메뉴"
+	help := "[↑/↓/j/k] 이동  [e] 수정  [d] 삭제  [r] 범위  [Esc] 메뉴"
 	if m.hasMore {
 		help = "[Tab] 더보기  " + help
 	}

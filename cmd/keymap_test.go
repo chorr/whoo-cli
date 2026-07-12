@@ -55,7 +55,7 @@ func TestListAction(t *testing.T) {
 		want Action
 	}{
 		{"esc", ActionBack},
-		{"q", ActionExit},
+		{"q", ActionNone}, // 기능 화면 q 미사용 (메인 메뉴만 직접 처리)
 		{"enter", ActionConfirm},
 		{"d", ActionDelete},
 		{"e", ActionEdit},
@@ -79,7 +79,7 @@ func TestHorizontalSelectAction(t *testing.T) {
 		want Action
 	}{
 		{"esc", ActionBack},
-		{"q", ActionExit},
+		{"q", ActionNone},
 		{"enter", ActionConfirm},
 		{"left", ActionMoveLeft},
 		{"h", ActionMoveLeft},
@@ -126,7 +126,7 @@ func TestErrorAction(t *testing.T) {
 	}{
 		{"enter", ActionBack},
 		{"esc", ActionBack},
-		{"q", ActionExit},
+		{"q", ActionNone},
 		{"ctrl+c", ActionNone},
 	}
 	for _, tt := range tests {
@@ -139,9 +139,9 @@ func TestErrorAction(t *testing.T) {
 
 func TestNumberAction(t *testing.T) {
 	tests := []struct {
-		key      string
-		wantIdx  int
-		wantOk   bool
+		key     string
+		wantIdx int
+		wantOk  bool
 	}{
 		{"1", 0, true},
 		{"5", 4, true},
@@ -154,6 +154,49 @@ func TestNumberAction(t *testing.T) {
 		idx, ok := NumberAction(makeKey(tt.key))
 		if ok != tt.wantOk || idx != tt.wantIdx {
 			t.Errorf("NumberAction(%q) = (%d, %v), want (%d, %v)", tt.key, idx, ok, tt.wantIdx, tt.wantOk)
+		}
+	}
+}
+
+func TestItemShortcutAction(t *testing.T) {
+	tests := []struct {
+		key     string
+		wantIdx int
+		wantOk  bool
+	}{
+		{"1", 0, true},
+		{"9", 8, true},
+		{"a", 9, true},  // 10번째
+		{"b", 10, true}, // 11번째
+		{"c", 11, true}, // 12번째
+		{"A", 9, true},  // 대소문자 동일
+		{"z", 34, true},
+		{"0", -1, false},
+		{"enter", -1, false},
+	}
+	for _, tt := range tests {
+		idx, ok := ItemShortcutAction(makeKey(tt.key))
+		if ok != tt.wantOk || idx != tt.wantIdx {
+			t.Errorf("ItemShortcutAction(%q) = (%d, %v), want (%d, %v)", tt.key, idx, ok, tt.wantIdx, tt.wantOk)
+		}
+	}
+}
+
+func TestItemShortcutLabel(t *testing.T) {
+	tests := []struct {
+		index int
+		want  string
+	}{
+		{0, "1"},
+		{8, "9"},
+		{9, "a"},
+		{10, "b"},
+		{11, "c"},
+		{34, "z"},
+	}
+	for _, tt := range tests {
+		if got := itemShortcutLabel(tt.index); got != tt.want {
+			t.Errorf("itemShortcutLabel(%d) = %q, want %q", tt.index, got, tt.want)
 		}
 	}
 }

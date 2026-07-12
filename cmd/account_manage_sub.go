@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -63,6 +64,8 @@ type accountManageSubModel struct {
 	accountsMap *api.AccountsMap
 	mode        accountManageMode
 	errMsg      string
+	width       int
+	height      int
 
 	// 계정 타입 선택 (bubbles/list)
 	typeList    list.Model
@@ -90,13 +93,14 @@ const (
 	accountFormStepConfirm
 )
 
-func newAccountManageSubModel(cfg *config.Config) *accountManageSubModel {
+func newAccountManageSubModel(cfg *config.Config, typeIndex int) *accountManageSubModel {
 	// 계정 타입 선택 목록 초기화
 	items := make([]list.Item, len(AccountTypes))
 	for i, at := range AccountTypes {
 		items[i] = accountTypeListItem{code: at.Code, name: at.Name}
 	}
 	typeList := newCompactList(items, 40, len(items)+2)
+	selectListIndex(&typeList, typeIndex)
 
 	return &accountManageSubModel{
 		cfg:      cfg,
@@ -104,6 +108,10 @@ func newAccountManageSubModel(cfg *config.Config) *accountManageSubModel {
 		mode:     accountManageModeLoading,
 		typeList: typeList,
 	}
+}
+
+func (m *accountManageSubModel) typeIndex() int {
+	return m.typeList.Index()
 }
 
 func (m *accountManageSubModel) Init() tea.Cmd {
@@ -123,28 +131,80 @@ func (m *accountManageSubModel) loadAccounts() tea.Cmd {
 type accountManageLoadedMsg struct{ accountsMap *api.AccountsMap }
 type accountManageErrMsg struct{ err error }
 
+// accountListChrome: 제목·헤더·도움말·여백 (목록 밖 줄 수)
+const accountListChrome = 8
+
 func (m *accountManageSubModel) buildAccountList() {
 	if m.accountsMap == nil {
 		return
 	}
 	accounts := m.accountsMap.GetAccountsByType(m.accountType)
-	m.accountIDs = nil
-	m.accountData = nil
-	var items []list.Item
-	for id, detail := range accounts {
-		m.accountIDs = append(m.accountIDs, id)
-		m.accountData = append(m.accountData, detail)
-		items = append(items, accountDetailListItem{id: id, detail: detail})
+	// 제목 기준 안정 정렬
+	type pair struct {
+		id     string
+		detail api.AccountDetail
 	}
-	m.accountList = newPlainList(items, 60, len(items)+2)
+	pairs := make([]pair, 0, len(accounts))
+	for id, detail := range accounts {
+		pairs = append(pairs, pair{id: id, detail: detail})
+	}
+	sort.SliceStable(pairs, func(i, j int) bool {
+		// 그룹 먼저, 이후 제목
+		if pairs[i].detail.Type != pairs[j].detail.Type {
+			if pairs[i].detail.Type == "group" {
+				return true
+			}
+			if pairs[j].detail.Type == "group" {
+				return false
+			}
+		}
+		return pairs[i].detail.Title < pairs[j].detail.Title
+	})
+
+	m.accountIDs = make([]string, 0, len(pairs))
+	m.accountData = make([]api.AccountDetail, 0, len(pairs))
+	items := make([]list.Item, 0, len(pairs))
+	for _, p := range pairs {
+		m.accountIDs = append(m.accountIDs, p.id)
+		m.accountData = append(m.accountData, p.detail)
+		items = append(items, accountDetailListItem{id: p.id, detail: p.detail})
+	}
+
+	// 뷰포트 높이 = 화면 안쪽 (전체 항목 수와 동일하게 잡으면 스크롤 불가)
+	w := listViewportWidth(m.width, 4)
+	h := listViewportHeight(m.height, accountListChrome, len(items))
+	// 번호 표기 + 번호 선택 가능한 콤팩트 목록
+	m.accountList = newCompactList(items, w, h)
+}
+
+func (m *accountManageSubModel) resizeLists() {
+	w := listViewportWidth(m.width, 4)
+	// 타입 목록은 항목 수가 적음
+	th := listViewportHeight(m.height, accountListChrome, len(m.typeList.Items()))
+	m.typeList.SetSize(w, th)
+	if len(m.accountList.Items()) > 0 {
+		ah := listViewportHeight(m.height, accountListChrome, len(m.accountList.Items()))
+		m.accountList.SetSize(w, ah)
+	}
 }
 
 func (m *accountManageSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.resizeLists()
+		return m, nil
+
 	case accountManageLoadedMsg:
 		m.accountsMap = msg.accountsMap
-		m.mode = accountManageModeTypeSelect
-		m.typeList.Select(0)
+		// 추가/수정/삭제 후 재로드: 타입을 이미 고른 상태면 목록으로 복귀
+		if m.accountType != "" {
+			m.buildAccountList()
+			m.mode = accountManageModeList
+		} else {
+			m.mode = accountManageModeTypeSelect
+		}
 
 	case accountManageErrMsg:
 		m.mode = accountManageModeError
@@ -170,9 +230,9 @@ func (m *accountManageSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case accountManageModeConfirmDelete:
 		return m.handleDeleteKey(msg)
 	case accountManageModeError:
-		// enter는 재시도, esc/q는 메뉴 복귀 (이 화면의 특수 에러 정책)
+		// enter는 재시도, esc는 메뉴 복귀 (이 화면의 특수 에러 정책)
 		switch msg.String() {
-		case "esc", "q":
+		case "esc":
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		case "enter":
 			m.mode = accountManageModeLoading
@@ -184,17 +244,31 @@ func (m *accountManageSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *accountManageSubModel) handleTypeSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch ListAction(msg) {
-	case ActionBack, ActionExit:
+	case ActionBack:
 		return m, func() tea.Msg { return backToMenuMsg{} }
 	case ActionConfirm:
-		m.accountType = AccountTypes[m.typeList.Index()].Code
-		m.buildAccountList()
-		m.mode = accountManageModeList
-		return m, nil
+		return m, m.enterAccountType(m.typeList.Index())
+	}
+	// 번호 바로선택
+	if idx, confirm, ok := handleListNumberJump(msg, len(m.typeList.Items()), true); ok {
+		m.typeList.Select(idx)
+		if confirm {
+			return m, m.enterAccountType(idx)
+		}
 	}
 	var cmd tea.Cmd
 	m.typeList, cmd = m.typeList.Update(msg)
 	return m, cmd
+}
+
+func (m *accountManageSubModel) enterAccountType(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(AccountTypes) {
+		return nil
+	}
+	m.accountType = AccountTypes[idx].Code
+	m.buildAccountList()
+	m.mode = accountManageModeList
+	return nil
 }
 
 func (m *accountManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -202,8 +276,6 @@ func (m *accountManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case ActionBack:
 		m.mode = accountManageModeTypeSelect
 		return m, nil
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	case ActionEdit:
 		if len(m.accountData) > 0 {
 			idx := m.accountList.Index()
@@ -231,6 +303,11 @@ func (m *accountManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.formMemo = ""
 		m.formCategory = "normal"
 		m.textInput = ""
+		return m, nil
+	}
+	// 번호 키: 해당 항목으로 커서 이동
+	if idx, _, ok := handleListNumberJump(msg, len(m.accountData), false); ok {
+		m.accountList.Select(idx)
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -262,9 +339,7 @@ func (m *accountManageSubModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.mode = accountManageModeList
 		m.textInput = ""
 	case tea.KeyBackspace, tea.KeyDelete:
-		if len(m.textInput) > 0 {
-			m.textInput = m.textInput[:len(m.textInput)-1]
-		}
+		m.textInput = backspaceRunes(m.textInput)
 	case tea.KeyEnter:
 		return m.advanceFormStep()
 	case tea.KeyRunes:
@@ -403,16 +478,22 @@ func (m *accountManageSubModel) View() string {
 	case accountManageModeTypeSelect:
 		b.WriteString(headerStyle.Render("계정 선택") + "\n\n")
 		b.WriteString(m.typeList.View() + "\n")
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [Enter] 선택  [Esc/q] 뒤로") + "\n")
+		b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(len(AccountTypes))) + "\n")
 
 	case accountManageModeList:
-		b.WriteString(headerStyle.Render(fmt.Sprintf("%s 항목", FormatAccount(m.accountType))) + "\n\n")
+		b.WriteString(headerStyle.Render(fmt.Sprintf("%s 항목 (%d)", FormatAccount(m.accountType), len(m.accountData))) + "\n\n")
 		if len(m.accountData) == 0 {
 			b.WriteString("항목이 없습니다.\n")
 		} else {
 			b.WriteString(m.accountList.View() + "\n")
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc/q] 뒤로") + "\n")
+		help := "[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로"
+		if n := len(m.accountData); n > 0 && n <= 9 {
+			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-%d] 점프  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로", n)
+		} else if n := len(m.accountData); n > 9 {
+			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-9/a-%s] 점프  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로", itemShortcutLabel(n-1))
+		}
+		b.WriteString("\n" + helpStyle.Render(help) + "\n")
 
 	case accountManageModeAdd:
 		b.WriteString(headerStyle.Render(fmt.Sprintf("%s 항목 추가", FormatAccount(m.accountType))) + "\n\n")

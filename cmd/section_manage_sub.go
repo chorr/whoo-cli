@@ -67,6 +67,7 @@ type sectionManageSubModel struct {
 	mode        sectionManageMode
 	errMsg      string
 	infoMsg     string
+	fromHub     bool // 섹션 허브에서 진입 시 Esc → 허브 복귀
 
 	// 폼 입력 필드 (add/edit)
 	formStep     int
@@ -151,23 +152,31 @@ func (m *sectionManageSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case sectionManageModeConfirmDelete:
 		return m.handleDeleteKey(msg)
 	case sectionManageModeError:
-		// enter는 재시도, esc/q는 메뉴 복귀 (이 화면의 특수 에러 정책)
+		// enter는 재시도, esc는 상위 복귀
 		if msg.Type == tea.KeyEnter {
 			m.mode = sectionManageModeLoading
 			return m, m.loadSections()
 		}
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
-			return m, func() tea.Msg { return backToMenuMsg{} }
+		case ActionBack:
+			return m, m.leaveCmd()
 		}
 	}
 	return m, nil
 }
 
+// leaveCmd는 허브 진입이면 허브, 아니면 메인 메뉴로 복귀
+func (m *sectionManageSubModel) leaveCmd() tea.Cmd {
+	if m.fromHub {
+		return func() tea.Msg { return backToSectionHubMsg{} }
+	}
+	return func() tea.Msg { return backToMenuMsg{} }
+}
+
 func (m *sectionManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch ListAction(msg) {
-	case ActionBack, ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
+	case ActionBack:
+		return m, m.leaveCmd()
 	case ActionEdit:
 		if len(m.sections) > 0 {
 			s := m.sections[m.sectionList.Index()]
@@ -210,9 +219,7 @@ func (m *sectionManageSubModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.textInput = ""
 		return m, nil
 	case tea.KeyBackspace, tea.KeyDelete:
-		if len(m.textInput) > 0 {
-			m.textInput = m.textInput[:len(m.textInput)-1]
-		}
+		m.textInput = backspaceRunes(m.textInput)
 	case tea.KeyEnter:
 		return m.advanceFormStep()
 	case tea.KeyRunes:
@@ -325,7 +332,7 @@ func (m *sectionManageSubModel) View() string {
 		}
 		b.WriteString(headerStyle.Render("섹션 목록") + "\n\n")
 		b.WriteString(m.sectionList.View() + "\n")
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc/q] 뒤로") + "\n")
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로") + "\n")
 
 	case sectionManageModeAdd:
 		b.WriteString(headerStyle.Render("섹션 추가") + "\n\n")

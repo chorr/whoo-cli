@@ -17,6 +17,7 @@ type appState int
 const (
 	stateAuth appState = iota
 	stateSection
+	stateSectionHub // 메인 메뉴 "섹션" → 변경/관리 선택
 	stateMenu
 	stateTransactions
 	stateEntry
@@ -40,6 +41,9 @@ type stateTransitionMsg struct {
 // backToMenuMsg는 메뉴로 돌아가기 메시지
 type backToMenuMsg struct{}
 
+// backToSectionHubMsg는 섹션 허브(변경/관리 선택)로 돌아가기
+type backToSectionHubMsg struct{}
+
 // backToTransactionsMsg는 거래내역으로 돌아가기 메시지
 type backToTransactionsMsg struct{}
 
@@ -49,10 +53,12 @@ type appModel struct {
 	cfg    *config.Config
 	width  int
 	height int
+	nav    navMemory // 메인/1뎁스 커서 복원
 
 	// 서브 모델들
 	authModel            *authSubModel
 	sectionModel         *sectionSubModel
+	sectionHubModel      *sectionHubSubModel
 	menuModel            *menuSubModel
 	transactionsModel    *transactionsSubModel
 	balanceModel         *balanceSubModel
@@ -85,7 +91,7 @@ func (m *appModel) determineInitialState() {
 		m.sectionModel = newSectionSubModel(m.cfg)
 	} else {
 		m.state = stateMenu
-		m.menuModel = newMenuSubModel(m.cfg)
+		m.menuModel = newMenuSubModel(m.cfg, m.nav.menuIndex)
 	}
 }
 
@@ -131,6 +137,11 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transitionTo(stateMenu)
 		return m, m.initCurrentState()
 
+	case backToSectionHubMsg:
+		// 섹션 변경/관리에서 Esc → 허브로 복귀
+		m.transitionTo(stateSectionHub)
+		return m, m.initCurrentState()
+
 	case authCompleteMsg:
 		// 인증 완료 후 섹션 선택으로
 		m.cfg = msg.cfg
@@ -144,7 +155,9 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.initCurrentState()
 
 	case menuSelectionMsg:
-		// 메뉴 선택에 따라 해당 화면으로
+		// 번호 바로선택 포함 — 떠날 커서 명시 저장
+		m.nav.menuIndex = msg.selection
+		// 메뉴 선택에 따라 해당 화면으로 (menu_sub.go 항목 순서와 일치)
 		switch msg.selection {
 		case 0: // 거래내역
 			m.transitionTo(stateTransactions)
@@ -152,27 +165,31 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transitionTo(stateEntry)
 		case 2: // 자산부채
 			m.transitionTo(stateBalance)
-		case 3: // 섹션변경
-			m.transitionTo(stateSection)
-		case 4: // 사용자 정보
-			m.transitionTo(stateUserInfo)
-		case 5: // 섹션 관리
-			m.transitionTo(stateSectionManage)
-		case 6: // 항목 관리
+		case 3: // 자주입력
+			m.transitionTo(stateFrequent)
+		case 4: // 월별입력
+			m.transitionTo(stateMonthly)
+		case 5: // 항목 관리
 			m.transitionTo(stateAccountManage)
-		case 7: // 흐름 분석
+		case 6: // 흐름 분석
 			m.transitionTo(stateFlow)
-		case 8: // 카드 관리
+		case 7: // 카드 관리
 			m.transitionTo(stateCard)
-		case 9: // 예산·목표
+		case 8: // 예산/목표
 			m.transitionTo(stateBudget)
+		case 9: // 섹션 (변경/관리 허브)
+			m.transitionTo(stateSectionHub)
+		case 10: // 사용자 정보
+			m.transitionTo(stateUserInfo)
 		}
 		return m, m.initCurrentState()
 
 	case editEntryMsg:
-		// 거래 수정
+		// 거래 수정: transitionTo는 신규 entry 모델을 만들므로
+		// 이전 상태만 정리한 뒤 수정용 모델을 직접 설정한다.
+		m.clearSubModel(m.state)
+		m.state = stateEntry
 		m.entryModel = newEntrySubModelForEdit(m.cfg, msg.entry, msg.accountsMap)
-		m.transitionTo(stateEntry)
 		return m, m.entryModel.Init()
 
 	case backToTransactionsMsg:
@@ -185,14 +202,15 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateSubModel(msg)
 }
 
-// transitionTo는 새로운 상태로 전환
-func (m *appModel) transitionTo(newState appState) {
-	// 이전 서브모델 정리
-	switch m.state {
+// clearSubModel은 지정 상태의 서브모델을 정리한다
+func (m *appModel) clearSubModel(state appState) {
+	switch state {
 	case stateAuth:
 		m.authModel = nil
 	case stateSection:
 		m.sectionModel = nil
+	case stateSectionHub:
+		m.sectionHubModel = nil
 	case stateMenu:
 		m.menuModel = nil
 	case stateTransactions:
@@ -218,17 +236,68 @@ func (m *appModel) transitionTo(newState appState) {
 	case stateBudget:
 		m.budgetModel = nil
 	}
+}
 
+// captureNav는 현재 화면의 1뎁스 커서를 navMemory에 저장한다
+func (m *appModel) captureNav() {
+	switch m.state {
+	case stateMenu:
+		if m.menuModel != nil {
+			m.nav.menuIndex = m.menuModel.cursorIndex()
+		}
+	case stateSectionHub:
+		if m.sectionHubModel != nil {
+			m.nav.sectionHubIndex = m.sectionHubModel.cursorIndex()
+		}
+	case stateFrequent:
+		if m.frequentModel != nil {
+			m.nav.frequentSlot = m.frequentModel.slotIndex()
+		}
+	case stateMonthly:
+		if m.monthlyModel != nil {
+			m.nav.monthlySlot = m.monthlyModel.slotIndex()
+		}
+	case stateCard:
+		if m.cardModel != nil {
+			m.nav.cardTab = m.cardModel.tabIndex()
+		}
+	case stateBudget:
+		if m.budgetModel != nil {
+			m.nav.budgetType = m.budgetModel.typeIndex()
+		}
+	case stateAccountManage:
+		if m.accountManageModel != nil {
+			m.nav.accountType = m.accountManageModel.typeIndex()
+		}
+	case stateFlow:
+		if m.flowModel != nil {
+			m.nav.flowType = m.flowModel.typeIndex()
+		}
+	}
+}
+
+// transitionTo는 새로운 상태로 전환
+func (m *appModel) transitionTo(newState appState) {
+	// 허브에서 변경/관리로 들어가면 Esc 시 허브로 복귀
+	fromSectionHub := m.state == stateSectionHub
+
+	// 소멸 전에 커서 기억
+	m.captureNav()
+
+	m.clearSubModel(m.state)
 	m.state = newState
 
-	// 새 서브모델 생성
+	// 새 서브모델 생성 (nav 인덱스로 커서 복원)
 	switch newState {
 	case stateAuth:
 		m.authModel = newAuthSubModel(m.cfg)
 	case stateSection:
 		m.sectionModel = newSectionSubModel(m.cfg)
+		m.sectionModel.fromHub = fromSectionHub
+	case stateSectionHub:
+		m.sectionHubModel = newSectionHubSubModel(m.cfg, m.nav.sectionHubIndex)
 	case stateMenu:
-		m.menuModel = newMenuSubModel(m.cfg)
+		m.menuModel = newMenuSubModel(m.cfg, m.nav.menuIndex)
 	case stateTransactions:
 		m.transactionsModel = newTransactionsSubModel(m.cfg)
 	case stateBalance:
@@ -239,18 +308,25 @@ func (m *appModel) transitionTo(newState appState) {
 		m.userInfoModel = newUserInfoSubModel(m.cfg)
 	case stateSectionManage:
 		m.sectionManageModel = newSectionManageSubModel(m.cfg)
+		m.sectionManageModel.fromHub = fromSectionHub
 	case stateAccountManage:
-		m.accountManageModel = newAccountManageSubModel(m.cfg)
+		m.accountManageModel = newAccountManageSubModel(m.cfg, m.nav.accountType)
+		// 이미 수신된 터미널 크기 반영 (모델 생성 전 WindowSize 유실 방지)
+		if m.width > 0 {
+			m.accountManageModel.width = m.width
+			m.accountManageModel.height = m.height
+			m.accountManageModel.resizeLists()
+		}
 	case stateFlow:
-		m.flowModel = newFlowSubModel(m.cfg)
+		m.flowModel = newFlowSubModel(m.cfg, m.nav.flowType)
 	case stateFrequent:
-		m.frequentModel = newFrequentSubModel(m.cfg)
+		m.frequentModel = newFrequentSubModel(m.cfg, m.nav.frequentSlot)
 	case stateMonthly:
-		m.monthlyModel = newMonthlySubModel(m.cfg)
+		m.monthlyModel = newMonthlySubModel(m.cfg, m.nav.monthlySlot)
 	case stateCard:
-		m.cardModel = newCardSubModel(m.cfg)
+		m.cardModel = newCardSubModel(m.cfg, m.nav.cardTab)
 	case stateBudget:
-		m.budgetModel = newBudgetSubModel(m.cfg)
+		m.budgetModel = newBudgetSubModel(m.cfg, m.nav.budgetType)
 	}
 }
 
@@ -264,6 +340,10 @@ func (m *appModel) initCurrentState() tea.Cmd {
 	case stateSection:
 		if m.sectionModel != nil {
 			return m.sectionModel.Init()
+		}
+	case stateSectionHub:
+		if m.sectionHubModel != nil {
+			return m.sectionHubModel.Init()
 		}
 	case stateMenu:
 		if m.menuModel != nil {
@@ -330,6 +410,12 @@ func (m *appModel) updateSubModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sectionModel != nil {
 			model, cmd := m.sectionModel.Update(msg)
 			m.sectionModel = model.(*sectionSubModel)
+			return m, cmd
+		}
+	case stateSectionHub:
+		if m.sectionHubModel != nil {
+			model, cmd := m.sectionHubModel.Update(msg)
+			m.sectionHubModel = model.(*sectionHubSubModel)
 			return m, cmd
 		}
 	case stateMenu:
@@ -422,6 +508,10 @@ func (m *appModel) View() string {
 	case stateSection:
 		if m.sectionModel != nil {
 			return m.sectionModel.View()
+		}
+	case stateSectionHub:
+		if m.sectionHubModel != nil {
+			return m.sectionHubModel.View()
 		}
 	case stateMenu:
 		if m.menuModel != nil {

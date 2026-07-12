@@ -1,5 +1,5 @@
 // cmd/budget_sub.go
-// 예산·목표 - bubbletea 서브 모델 (3탭: 월별 예산 / 장기목표 / 자본 목표)
+// 예산/목표 - bubbletea 서브 모델 (3탭: 월별 예산 / 장기목표 / 자본 목표)
 
 package cmd
 
@@ -69,14 +69,24 @@ type budgetSubModel struct {
 	capitalKeys []string // 정렬된 YYYYMM 키
 }
 
-func newBudgetSubModel(cfg *config.Config) *budgetSubModel {
+func newBudgetSubModel(cfg *config.Config, typeIndex int) *budgetSubModel {
+	typeIndex = clampIndex(typeIndex, 2)
+	accountType := "expenses"
+	if typeIndex == 1 {
+		accountType = "income"
+	}
 	return &budgetSubModel{
 		cfg:         cfg,
 		client:      NewClient(cfg),
 		mode:        budgetModeTypeSelect,
 		tab:         budgetTabBudget,
-		accountType: "expenses",
+		typeCursor:  typeIndex,
+		accountType: accountType,
 	}
+}
+
+func (m *budgetSubModel) typeIndex() int {
+	return m.typeCursor
 }
 
 // ─── 메시지 타입 ──────────────────────────────────────────────
@@ -145,7 +155,8 @@ func (m *budgetSubModel) loadCapitalGoal() tea.Cmd {
 	return func() tea.Msg {
 		now := time.Now()
 		from := int(now.Year())*100 + int(now.Month())
-		to := from + 11
+		// 12개월 구간: 이번 달 ~ 11개월 후 (YYYYMM 산술 오류 방지)
+		to := addMonthsYYYYMM(from, 11)
 		goal, err := m.client.GetGoal(sectionID, from, to)
 		if err != nil {
 			return budgetErrMsg{err: err}
@@ -222,7 +233,7 @@ func (m *budgetSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditConfirmKey(msg)
 	case budgetModeError:
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 	}
@@ -230,42 +241,26 @@ func (m *budgetSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *budgetSubModel) handleTypeSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch HorizontalSelectAction(msg) {
-	case ActionBack, ActionExit:
+	// 세로 번호 메뉴 (1=지출, 2=수입). 장기/자본 탭은 월별 예산 진입 후 전환.
+	types := []string{"expenses", "income"}
+	r := handleVerticalMenuKey(msg, m.typeCursor, len(types))
+	m.typeCursor = r.Cursor
+	if r.Back {
 		return m, func() tea.Msg { return backToMenuMsg{} }
-	case ActionMoveLeft:
-		if m.typeCursor > 0 {
-			m.typeCursor--
-		}
-	case ActionMoveRight:
-		if m.typeCursor < 1 {
-			m.typeCursor++
-		}
-	case ActionConfirm:
-		types := []string{"expenses", "income"}
+	}
+	if r.Confirm {
 		m.accountType = types[m.typeCursor]
+		m.tab = budgetTabBudget
 		m.mode = budgetModeLoading
 		return m, m.loadBudget()
-	}
-	// 탭 전환 도메인 키
-	switch msg.String() {
-	case "2":
-		m.tab = budgetTabGoal
-		m.mode = budgetModeLoading
-		return m, m.loadBudgetGoal()
-	case "3":
-		m.tab = budgetTabCapital
-		m.mode = budgetModeLoading
-		return m, m.loadCapitalGoal()
 	}
 	return m, nil
 }
 
 func (m *budgetSubModel) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q":
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	case "esc":
+		// 유형 선택으로 한 단계 뒤로 (유형 선택에서 다시 esc → 메뉴)
 		if m.tab == budgetTabBudget {
 			m.mode = budgetModeTypeSelect
 		} else {
@@ -393,11 +388,11 @@ func (m *budgetSubModel) currentLoadCmd() tea.Cmd {
 func (m *budgetSubModel) View() string {
 	switch m.mode {
 	case budgetModeLoading:
-		return titleStyle.Render("예산·목표") + "\n\n불러오는 중...\n"
+		return titleStyle.Render("예산/목표") + "\n\n불러오는 중...\n"
 	case budgetModeError:
-		return titleStyle.Render("예산·목표") + "\n\n" +
+		return titleStyle.Render("예산/목표") + "\n\n" +
 			errorStyle.Render("[오류] "+m.errMsg) + "\n\n" +
-			helpStyle.Render("[Enter/q] 메뉴로 돌아가기")
+			helpStyle.Render("[Enter/Esc] 메뉴로 돌아가기")
 	case budgetModeTypeSelect:
 		return m.renderTypeSelect()
 	case budgetModeView:
@@ -425,25 +420,19 @@ func (m *budgetSubModel) renderTabBar() string {
 
 func (m *budgetSubModel) renderTypeSelect() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("예산·목표") + "\n")
+	b.WriteString(titleStyle.Render("예산/목표") + "\n")
 	b.WriteString(m.renderTabBar() + "\n\n")
 	b.WriteString(headerStyle.Render("계정 유형 선택") + "\n\n")
 
 	types := []string{"지출(expenses)", "수입(income)"}
-	for i, t := range types {
-		if i == m.typeCursor {
-			b.WriteString(selectedStyle.Render("> "+t) + "\n")
-		} else {
-			b.WriteString("  " + t + "\n")
-		}
-	}
-	b.WriteString("\n" + helpStyle.Render("[←/→/h/l] 이동  [Enter] 선택  [2] 장기목표  [3] 자본목표  [q] 메뉴"))
+	b.WriteString(renderNumberedMenuLines(types, m.typeCursor))
+	b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(len(types))))
 	return b.String()
 }
 
 func (m *budgetSubModel) renderView() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("예산·목표") + "\n")
+	b.WriteString(titleStyle.Render("예산/목표") + "\n")
 	b.WriteString(m.renderTabBar() + "\n\n")
 
 	switch m.tab {
@@ -514,13 +503,13 @@ func (m *budgetSubModel) writeBudgetView(b *strings.Builder) {
 		b.WriteString(tableBuf.String())
 	}
 
-	b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [e] 예산 편집  [r] 새로고침  [2] 장기목표  [3] 자본목표  [Esc] 유형선택  [q] 메뉴"))
+	b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [e] 예산 편집  [r] 새로고침  [2] 장기목표  [3] 자본목표  [Esc] 유형선택"))
 }
 
 func (m *budgetSubModel) writeBudgetGoalView(b *strings.Builder) {
 	if m.goalResp == nil {
 		b.WriteString("장기목표가 설정되어 있지 않습니다\n")
-		b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
 		return
 	}
 
@@ -550,14 +539,14 @@ func (m *budgetSubModel) writeBudgetGoalView(b *strings.Builder) {
 		progress = float64(g.BaseMoney) / float64(g.GoalMoney) * 100
 	}
 	b.WriteString(fmt.Sprintf("\n목표 달성률: %s\n", renderPossibilityBar(progress)))
-	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [q] 메뉴"))
+	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
 }
 
 func (m *budgetSubModel) writeCapitalGoalView(b *strings.Builder) {
 	if len(m.capitalGoal) == 0 {
 		b.WriteString("자본 목표가 설정되어 있지 않습니다\n")
 		b.WriteString("(장기목표 미사용 섹션이거나 목표가 없습니다)\n")
-		b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [2] 장기목표  [r] 새로고침  [q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [2] 장기목표  [r] 새로고침  [Esc] 유형선택"))
 		return
 	}
 
@@ -580,12 +569,12 @@ func (m *budgetSubModel) writeCapitalGoalView(b *strings.Builder) {
 		b.WriteString(fmt.Sprintf("  %s  %s  %s원\n", ym, bar, FormatMoney(float64(v))))
 	}
 
-	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [2] 장기목표  [r] 새로고침  [q] 메뉴"))
+	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [2] 장기목표  [r] 새로고침  [Esc] 유형선택"))
 }
 
 func (m *budgetSubModel) renderEdit() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("예산·목표") + "\n")
+	b.WriteString(titleStyle.Render("예산/목표") + "\n")
 	b.WriteString(m.renderTabBar() + "\n\n")
 	b.WriteString(headerStyle.Render("예산 편집") + "\n\n")
 
@@ -605,7 +594,7 @@ func (m *budgetSubModel) renderEdit() string {
 
 func (m *budgetSubModel) renderEditConfirm() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("예산·목표") + "\n\n")
+	b.WriteString(titleStyle.Render("예산/목표") + "\n\n")
 	b.WriteString(errorStyle.Render("[주의] 이 섹션은 장기목표 연동 모드입니다") + "\n\n")
 	b.WriteString("예산을 수정하면 이 월 이후의 모든 자본 목표(goal)가\n자동으로 재계산됩니다.\n\n")
 	b.WriteString("계속 진행하시겠습니까?\n\n")

@@ -255,46 +255,17 @@ type frequentItemInfo struct {
 
 // findFrequentItemByID는 raw API 응답에서 특정 ID의 자주입력 항목을 찾아 반환
 func findFrequentItemByID(raw []byte, itemID string) *frequentItemInfo {
-	var wrapper map[string]interface{}
-	if err := parseJSONResponse(raw, &wrapper); err != nil {
-		return nil
-	}
-
-	// results 레벨 언래핑
-	var root map[string]interface{}
-	if r, ok := wrapper["results"]; ok {
-		if rm, ok := r.(map[string]interface{}); ok {
-			root = rm
-		}
-	}
-	if root == nil {
-		root = wrapper
-	}
-
-	for _, v := range root {
-		arr, ok := v.([]interface{})
-		if !ok {
+	for _, m := range extractWhooingItemMaps(raw) {
+		if whooingItemID(m) != itemID {
 			continue
 		}
-		for _, elem := range arr {
-			m, ok := elem.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			id, _ := m["frequent_item_id"].(string)
-			if id != itemID {
-				continue
-			}
-			fi := &frequentItemInfo{}
-			fi.Item, _ = m["item"].(string)
-			fi.LAccount, _ = m["l_account"].(string)
-			fi.LAccountID, _ = m["l_account_id"].(string)
-			fi.RAccount, _ = m["r_account"].(string)
-			fi.RAccountID, _ = m["r_account_id"].(string)
-			if mv, ok := m["money"].(float64); ok {
-				fi.Money = int64(mv)
-			}
-			return fi
+		return &frequentItemInfo{
+			Item:       mapString(m, "item"),
+			Money:      mapInt64(m, "money"),
+			LAccount:   mapString(m, "l_account"),
+			LAccountID: mapString(m, "l_account_id"),
+			RAccount:   mapString(m, "r_account"),
+			RAccountID: mapString(m, "r_account_id"),
 		}
 	}
 	return nil

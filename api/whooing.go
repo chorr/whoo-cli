@@ -136,25 +136,58 @@ func (am *AccountsMap) GetTitle(accountType, accountID string) string {
 }
 
 // Entry는 거래 내역
-// 실제 API 응답: entry_id는 int, entry_date는 "YYYYMMDD.NNNN" 형식
+// 실제 API 응답: entry_id는 int, entry_date는 숫자 또는 "YYYYMMDD.NNNN" 문자열
 type Entry struct {
-	EntryID    int     `json:"entry_id"`
-	EntryDate  string  `json:"entry_date"` // "20260310.0007" 형식 (뒤 소수점은 정렬용)
-	LAccount   string  `json:"l_account"`  // 왼쪽
-	LAccountID string  `json:"l_account_id"`
-	RAccount   string  `json:"r_account"` // 오른쪽
-	RAccountID string  `json:"r_account_id"`
-	Money      float64 `json:"money"`
-	Item       string  `json:"item"`
-	Memo       string  `json:"memo"`
+	EntryID    int            `json:"entry_id"`
+	EntryDate  FlexibleString `json:"entry_date"` // "20260310.0007" 형식 (뒤 소수점은 정렬용)
+	LAccount   string         `json:"l_account"`  // 왼쪽
+	LAccountID string         `json:"l_account_id"`
+	RAccount   string         `json:"r_account"` // 오른쪽
+	RAccountID string         `json:"r_account_id"`
+	Money      float64        `json:"money"`
+	Item       string         `json:"item"`
+	Memo       string         `json:"memo"`
+}
+
+// FlexibleString은 JSON string 또는 number를 모두 문자열로 수용한다
+// Whooing API는 entry_date 등을 number(20110812.0001) 또는 string으로 반환할 수 있다
+type FlexibleString string
+
+// UnmarshalJSON은 string/number/null을 모두 수용
+func (s *FlexibleString) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*s = ""
+		return nil
+	}
+	if data[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		*s = FlexibleString(str)
+		return nil
+	}
+	// number (정수/소수)
+	var num json.Number
+	if err := json.Unmarshal(data, &num); err != nil {
+		return fmt.Errorf("FlexibleString: %w", err)
+	}
+	*s = FlexibleString(num.String())
+	return nil
+}
+
+// String은 FlexibleString을 일반 문자열로 반환
+func (s FlexibleString) String() string {
+	return string(s)
 }
 
 // DateOnly는 entry_date에서 날짜 부분(YYYYMMDD)만 반환
 func (e *Entry) DateOnly() string {
-	if idx := strings.Index(e.EntryDate, "."); idx > 0 {
-		return e.EntryDate[:idx]
+	ed := string(e.EntryDate)
+	if idx := strings.Index(ed, "."); idx > 0 {
+		return ed[:idx]
 	}
-	return e.EntryDate
+	return ed
 }
 
 // entriesResponse는 거래 내역 API 응답의 results 구조
@@ -195,12 +228,26 @@ func NewWhooingClient(cfg *config.Config) *WhooingClient {
 }
 
 // buildAPIKey는 X-API-KEY 헤더 값 생성
-func (c *WhooingClient) buildAPIKey() string {
-	timestamp := time.Now().UnixMilli()
+// app_id/secret 미설정 시 빈 헤더 대신 에러를 반환해 원인 불명 400을 막는다
+func (c *WhooingClient) buildAPIKey() (string, error) {
+	appID, err := config.GetAppID()
+	if err != nil {
+		return "", err
+	}
+	if appID == "" {
+		return "", fmt.Errorf("app_id가 비어 있습니다")
+	}
 	signiture := c.config.ComputeSigniture()
-	appID, _ := config.GetAppID()
+	if signiture == "" {
+		// secret 미설정 또는 token_secret 없음
+		if _, err := config.GetAppSecret(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("signiture 계산 실패: token_secret을 확인하세요")
+	}
+	timestamp := time.Now().UnixMilli()
 	return fmt.Sprintf("app_id=%s,token=%s,signiture=%s,timestamp=%d",
-		appID, c.config.Token, signiture, timestamp)
+		appID, c.config.Token, signiture, timestamp), nil
 }
 
 // acquireToken은 토큰버킷에서 토큰 1개를 소비. 필요 시 대기
@@ -290,7 +337,11 @@ func (c *WhooingClient) doRequestOnce(method, endpoint string, params url.Values
 		return nil, 0, fmt.Errorf("요청 생성 실패: %w", err)
 	}
 
-	req.Header.Set("X-API-KEY", c.buildAPIKey())
+	apiKey, err := c.buildAPIKey()
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("X-API-KEY", apiKey)
 	req.Header.Set("Accept", "application/json")
 	if method == http.MethodPost || method == http.MethodPut {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
@@ -383,6 +434,15 @@ func (c *WhooingClient) parseEntryArrayResponse(data []byte) (*Entry, error) {
 		return nil, fmt.Errorf("응답에 거래 데이터가 없습니다")
 	}
 	return &entries[0], nil
+}
+
+// parseEntryObjectResponse는 results가 Entry 객체인 응답을 파싱 (수정 API)
+func (c *WhooingClient) parseEntryObjectResponse(data []byte) (*Entry, error) {
+	var entry Entry
+	if err := parseResponseWithClient(c, data, &entry); err != nil {
+		return nil, err
+	}
+	return &entry, nil
 }
 
 // GetSections는 섹션(가계부) 목록 조회
@@ -548,7 +608,8 @@ func (c *WhooingClient) UpdateEntry(sectionID string, entryID int, fields map[st
 		return nil, err
 	}
 
-	return c.parseEntryArrayResponse(data)
+	// PUT 응답 results는 단일 객체 (POST 생성은 배열)
+	return c.parseEntryObjectResponse(data)
 }
 
 // DeleteEntry는 거래 삭제

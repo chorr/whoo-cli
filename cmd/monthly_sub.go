@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ const (
 	monthlyModeList                             // 항목 목록
 	monthlyModeAdd                              // 추가 폼 (list 'a')
 	monthlyModeEdit                             // 수정 폼 (list 'e')
+	monthlyModeConfirmPay                       // 결제(거래 입력) 확인
 	monthlyModeConfirmDelete                    // 삭제 확인
 	monthlyModeLoading
 	monthlyModeError
@@ -101,13 +103,19 @@ type monthlySubModel struct {
 	textInput       string
 }
 
-func newMonthlySubModel(cfg *config.Config) *monthlySubModel {
+func newMonthlySubModel(cfg *config.Config, slotIndex int) *monthlySubModel {
+	slots := []string{"slot1", "slot2", "slot3"}
 	return &monthlySubModel{
-		cfg:    cfg,
-		client: NewClient(cfg),
-		mode:   monthlyModeSlotSelect,
-		slots:  []string{"slot1", "slot2", "slot3"},
+		cfg:        cfg,
+		client:     NewClient(cfg),
+		mode:       monthlyModeSlotSelect,
+		slots:      slots,
+		slotCursor: clampIndex(slotIndex, len(slots)),
 	}
+}
+
+func (m *monthlySubModel) slotIndex() int {
+	return m.slotCursor
 }
 
 // ─── 비동기 커맨드 ──────────────────────────────────────────────
@@ -144,12 +152,34 @@ func (m *monthlySubModel) doDelete(slot, itemID string) tea.Cmd {
 	}
 }
 
+// doPay는 월별입력을 실제 거래로 확정(결제)한다.
+// 공식 API에 별도 pay 엔드포인트는 없고, due_date 기준 CreateEntry로 처리한다.
+func (m *monthlySubModel) doPay(item monthlyItem) tea.Cmd {
+	sectionID := m.cfg.SectionID
+	return func() tea.Msg {
+		date := item.DueDate
+		if len(date) != 8 {
+			date = time.Now().Format("20060102")
+		}
+		_, err := m.client.CreateEntry(
+			sectionID, date,
+			item.LAccount, item.LAccountID, item.RAccount, item.RAccountID,
+			item.Item, "", float64(item.Money),
+		)
+		if err != nil {
+			return monthlyActionDoneMsg{err: err}
+		}
+		return monthlyActionDoneMsg{feedback: fmt.Sprintf("'%s' 거래가 입력되었습니다 (%s)", item.Item, FormatDate(date))}
+	}
+}
+
 func (m *monthlySubModel) buildMonthlyList(items []monthlyItem) list.Model {
 	listItems := make([]list.Item, len(items))
 	for i, it := range items {
 		listItems[i] = monthlyListItem{item: it}
 	}
-	return newPlainList(listItems, 70, len(listItems)+2)
+	h := listViewportHeight(0, 8, len(listItems))
+	return newCompactList(listItems, 70, h)
 }
 
 // ─── BubbleTea ────────────────────────────────────────────────
@@ -197,13 +227,13 @@ func (m *monthlySubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSlotKey(msg)
 	case monthlyModeList:
 		return m.handleListKey(msg)
-	case monthlyModeConfirmDelete:
+	case monthlyModeConfirmPay, monthlyModeConfirmDelete:
 		return m.handleConfirmKey(msg)
 	case monthlyModeAdd, monthlyModeEdit:
 		return m.handleFormKey(msg)
 	case monthlyModeError:
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 	}
@@ -211,22 +241,16 @@ func (m *monthlySubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *monthlySubModel) handleSlotKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch HorizontalSelectAction(msg) {
-	case ActionBack, ActionExit:
+	r := handleVerticalMenuKey(msg, m.slotCursor, len(m.slots))
+	m.slotCursor = r.Cursor
+	if r.Back {
 		return m, func() tea.Msg { return backToMenuMsg{} }
-	case ActionConfirm:
+	}
+	if r.Confirm {
 		slot := m.slots[m.slotCursor]
 		m.activeSlot = slot
 		m.mode = monthlyModeLoading
 		return m, m.loadItems(slot)
-	case ActionMoveLeft:
-		if m.slotCursor > 0 {
-			m.slotCursor--
-		}
-	case ActionMoveRight:
-		if m.slotCursor < len(m.slots)-1 {
-			m.slotCursor++
-		}
 	}
 	return m, nil
 }
@@ -236,6 +260,12 @@ func (m *monthlySubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActionBack:
 		m.mode = monthlyModeSlotSelect
 		m.feedback = ""
+		return m, nil
+	case ActionConfirm:
+		// Enter = 결제(거래 입력) — 월별입력의 핵심 액션
+		if len(m.items) > 0 {
+			m.mode = monthlyModeConfirmPay
+		}
 		return m, nil
 	case ActionEdit:
 		if len(m.items) > 0 {
@@ -264,8 +294,11 @@ func (m *monthlySubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = monthlyModeConfirmDelete
 		}
 		return m, nil
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
+	}
+	// 번호 점프
+	if idx, _, ok := handleListNumberJump(msg, len(m.items), false); ok {
+		m.monthlyList.Select(idx)
+		return m, nil
 	}
 	// 도메인 전용: a = 추가
 	if msg.String() == "a" {
@@ -290,13 +323,18 @@ func (m *monthlySubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *monthlySubModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	confirmMode := m.mode // ConfirmAction 처리 전 모드 보존
 	switch ConfirmAction(msg) {
 	case ActionConfirm:
-		if len(m.items) > 0 {
-			item := m.items[m.monthlyList.Index()]
-			m.mode = monthlyModeLoading
-			return m, m.doDelete(m.activeSlot, item.ID)
+		if len(m.items) == 0 {
+			return m, nil
 		}
+		item := m.items[m.monthlyList.Index()]
+		m.mode = monthlyModeLoading
+		if confirmMode == monthlyModeConfirmPay {
+			return m, m.doPay(item)
+		}
+		return m, m.doDelete(m.activeSlot, item.ID)
 	case ActionBack:
 		m.mode = monthlyModeList
 	}
@@ -304,12 +342,12 @@ func (m *monthlySubModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m *monthlySubModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// raw Key handling to match account_manage_sub.go exactly (FormAction would steal 'q' as Exit for text input)
+	// raw Key handling to match account_manage_sub.go exactly (FormAction uses esc only; q is a typeable rune)
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit // unreachable (GlobalAction catches ctrl+c in Update before handleKey); kept for exact structural match to account_manage_sub.go handleFormKey
 	case tea.KeyEscape:
-		// full reset (editingID + forms + feedback) on cancel; esc only (not q) so 'q' is typeable rune
+		// full reset (editingID + forms + feedback) on cancel; esc only so 'q' remains typeable in forms
 		m.editingID = ""
 		m.formStep = monthlyFormStepItem
 		m.formItem = ""
@@ -475,14 +513,8 @@ func (m *monthlySubModel) View() string {
 	switch m.mode {
 	case monthlyModeSlotSelect:
 		b.WriteString(headerStyle.Render("슬롯 선택") + "\n\n")
-		for i, s := range m.slots {
-			if i == m.slotCursor {
-				b.WriteString(selectedStyle.Render("> "+s) + "\n")
-			} else {
-				b.WriteString("  " + s + "\n")
-			}
-		}
-		b.WriteString("\n" + helpStyle.Render("[←/→/h/l] 이동  [Enter] 선택  [Esc/q] 뒤로"))
+		b.WriteString(renderNumberedMenuLines(m.slots, m.slotCursor))
+		b.WriteString("\n" + helpStyle.Render(numberedMenuHelp(len(m.slots))))
 
 	case monthlyModeLoading:
 		b.WriteString("불러오는 중...")
@@ -497,7 +529,7 @@ func (m *monthlySubModel) View() string {
 		} else {
 			b.WriteString(m.monthlyList.View() + "\n")
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc] 슬롯선택  [q] 메뉴"))
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 점프  [Enter] 결제입력  [a] 추가  [e] 수정  [d] 삭제  [Esc] 슬롯선택"))
 
 	case monthlyModeAdd:
 		b.WriteString(headerStyle.Render(fmt.Sprintf("월별입력 추가 [%s]", m.activeSlot)) + "\n\n")
@@ -506,6 +538,22 @@ func (m *monthlySubModel) View() string {
 	case monthlyModeEdit:
 		b.WriteString(headerStyle.Render(fmt.Sprintf("월별입력 수정 [%s]", m.activeSlot)) + "\n\n")
 		b.WriteString(m.renderFormStep("수정"))
+
+	case monthlyModeConfirmPay:
+		if len(m.items) > 0 {
+			item := m.items[m.monthlyList.Index()]
+			date := item.DueDate
+			if len(date) != 8 {
+				date = time.Now().Format("20060102")
+			}
+			b.WriteString(headerStyle.Render("결제 입력 확인") + "\n\n")
+			b.WriteString(fmt.Sprintf("  %s | %s원 | 결제일 %d일\n", item.Item, FormatMoney(float64(item.Money)), item.PayDate))
+			b.WriteString(fmt.Sprintf("  거래일: %s (due_date)\n", FormatDate(date)))
+			b.WriteString(fmt.Sprintf("  %s > %s  ←  %s > %s\n",
+				FormatAccount(item.LAccount), item.LAccountID,
+				FormatAccount(item.RAccount), item.RAccountID))
+			b.WriteString("\n" + helpStyle.Render("[y] 거래 입력  [n/Esc] 취소"))
+		}
 
 	case monthlyModeConfirmDelete:
 		if len(m.items) > 0 {
@@ -552,57 +600,39 @@ func calcDDay(dueDateStr string) int {
 }
 
 // parseMonthlyItemsFromRaw는 raw API 응답에서 월별입력 항목 목록 파싱
+// 실제 응답: results.slotN 이 배열이 아니라 item_id 키 맵인 경우가 대부분.
 func parseMonthlyItemsFromRaw(raw []byte) []monthlyItem {
-	var wrapper map[string]interface{}
-	if err := parseJSONResponse(raw, &wrapper); err != nil {
-		return nil
-	}
-
-	var root map[string]interface{}
-	if r, ok := wrapper["results"]; ok {
-		if rm, ok := r.(map[string]interface{}); ok {
-			root = rm
+	maps := extractWhooingItemMaps(raw)
+	items := make([]monthlyItem, 0, len(maps))
+	for _, m := range maps {
+		mi := monthlyItem{
+			ID:          whooingItemID(m),
+			Item:        mapString(m, "item"),
+			Money:       mapInt64(m, "money"),
+			PayDate:     mapInt(m, "pay_date"),
+			DueDate:     mapString(m, "due_date"),
+			PaidDate:    mapString(m, "paid_date"),
+			LAccount:    mapString(m, "l_account"),
+			LAccountID:  mapString(m, "l_account_id"),
+			RAccount:    mapString(m, "r_account"),
+			RAccountID:  mapString(m, "r_account_id"),
+			SkipHoliday: mapString(m, "skip_holiday"),
 		}
-	}
-	if root == nil {
-		root = wrapper
-	}
-
-	var items []monthlyItem
-	for _, v := range root {
-		arr, ok := v.([]interface{})
-		if !ok {
-			continue
+		// d_day=0(당일)도 유효하므로 키 존재 여부로 판단
+		if _, ok := m["d_day"]; ok {
+			mi.DDay = mapInt(m, "d_day")
+		} else {
+			mi.DDay = calcDDay(mi.DueDate)
 		}
-		for _, elem := range arr {
-			m, ok := elem.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			mi := monthlyItem{}
-			mi.ID, _ = m["monthly_item_id"].(string)
-			mi.Item, _ = m["item"].(string)
-			mi.LAccount, _ = m["l_account"].(string)
-			mi.LAccountID, _ = m["l_account_id"].(string)
-			mi.RAccount, _ = m["r_account"].(string)
-			mi.RAccountID, _ = m["r_account_id"].(string)
-			mi.SkipHoliday, _ = m["skip_holiday"].(string)
-			mi.DueDate, _ = m["due_date"].(string)
-			mi.PaidDate, _ = m["paid_date"].(string)
-			if mv, ok := m["money"].(float64); ok {
-				mi.Money = int64(mv)
-			}
-			if pd, ok := m["pay_date"].(float64); ok {
-				mi.PayDate = int(pd)
-			}
-			if dd, ok := m["d_day"].(float64); ok {
-				mi.DDay = int(dd)
-			} else {
-				mi.DDay = calcDDay(mi.DueDate)
-			}
-			items = append(items, mi)
-		}
+		items = append(items, mi)
 	}
+	// 결제일 → 아이템명 순 정렬
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].PayDate != items[j].PayDate {
+			return items[i].PayDate < items[j].PayDate
+		}
+		return items[i].Item < items[j].Item
+	})
 	return items
 }
 

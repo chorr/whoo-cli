@@ -15,7 +15,7 @@ import (
 )
 
 // 버전 정보
-const Version = "0.9.0"
+const Version = "1.0.0"
 
 // RequireAuth는 인증 상태를 확인하고 미인증 시 안내 후 종료
 func RequireAuth(cfg *config.Config) {
@@ -32,7 +32,9 @@ func RequireSection(cfg *config.Config) {
 	if cfg.SectionID == "" {
 		fmt.Fprintln(os.Stderr, "[오류] 섹션이 선택되지 않았습니다")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  whoo section  섹션 목록 확인 및 선택")
+		fmt.Fprintln(os.Stderr, "  whoo sections       섹션 목록")
+		fmt.Fprintln(os.Stderr, "  whoo sections set   섹션 선택")
+		fmt.Fprintln(os.Stderr, "  whoo                TUI에서 섹션 선택")
 		os.Exit(1)
 	}
 }
@@ -138,24 +140,38 @@ func ShowHelp() {
 	fmt.Println("사용법: whoo [command]")
 	fmt.Println()
 	fmt.Println("커맨드:")
-	fmt.Println("  (없음)       인터랙티브 TUI 실행")
-	fmt.Println("  auth         OAuth 인증")
-	fmt.Println("  status       인증/설정 상태 확인")
-	fmt.Println("  user         유저 정보 조회")
-	fmt.Println("  user_logs    유저 로그 조회")
-	fmt.Println("  sections     섹션 관리 (sections help 참조)")
-	fmt.Println("  accounts     항목 관리 (accounts help 참조)")
-	fmt.Println("  entries      거래내역 조회 (entries help 참조)")
-	fmt.Println("  frequent     자주입력 관리 (frequent help 참조)")
-	fmt.Println("  monthly      월별입력 관리 (monthly help 참조)")
-	fmt.Println("  help         도움말 표시")
+	fmt.Println("  (없음)         인터랙티브 TUI 실행")
+	fmt.Println("  auth           OAuth 인증")
+	fmt.Println("  status         인증/설정 상태 확인")
+	fmt.Println("  user           유저 정보 조회")
+	fmt.Println("  user_logs      유저 로그 조회")
+	fmt.Println("  sections       섹션 관리 (sections help 참조)")
+	fmt.Println("  accounts       항목 관리 (accounts help 참조)")
+	fmt.Println("  entries        거래내역 (entries help 참조)")
+	fmt.Println("  frequent       자주입력 관리 (frequent help 참조)")
+	fmt.Println("  monthly        월별입력 관리 (monthly help 참조)")
+	fmt.Println("  inout          자금증감 조회 (inout help 참조)")
+	fmt.Println("  budget         예산 관리 (budget help 참조)")
+	fmt.Println("  budget-goal    예산 목표")
+	fmt.Println("  goal           자본 목표")
+	fmt.Println("  bill           신용카드 청구 (bill help 참조)")
+	fmt.Println("  checkcard      체크카드 연동 (checkcard help 참조)")
+	fmt.Println("  version        버전 표시")
+	fmt.Println("  help           도움말 표시")
 	fmt.Println()
 	fmt.Println("단축:")
-	fmt.Println("  s = sections, a = accounts, e = entries, f = frequent, m = monthly")
+	fmt.Println("  s = sections, a = accounts, e = entries")
+	fmt.Println("  f = frequent, m = monthly, b = bill, cc = checkcard, io = inout")
 	fmt.Println()
 	fmt.Println("예시:")
-	fmt.Println("  whoo                     TUI 실행")
+	fmt.Println("  whoo                   TUI 실행")
 	fmt.Println("  whoo entries           이번 달 거래내역")
 	fmt.Println("  whoo accounts assets   자산 항목 목록")
 	fmt.Println("  whoo sections          섹션 목록")
+	fmt.Println("  whoo budget list       예산 조회")
+}
+
+// ShowVersion은 버전만 출력
+func ShowVersion() {
+	fmt.Printf("whoo %s\n", Version)
 }

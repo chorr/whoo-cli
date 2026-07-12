@@ -77,9 +77,9 @@ func (m *userInfoSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if GlobalAction(msg) == ActionQuit {
 			return m, tea.Quit
 		}
-		// 로딩/에러/정상 상태 모두 enter/esc/q → 메뉴 복귀
+		// 로딩/에러/정상 상태 모두 enter/esc → 메뉴 복귀
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 
@@ -103,7 +103,7 @@ func (m *userInfoSubModel) View() string {
 	if m.err != nil {
 		return titleStyle.Render("사용자 정보") + "\n\n" +
 			errorStyle.Render("[오류] "+m.err.Error()) + "\n\n" +
-			helpStyle.Render("[Enter/Esc/q] 메뉴로 돌아가기")
+			helpStyle.Render("[Enter/Esc] 메뉴로 돌아가기")
 	}
 
 	return m.renderUserInfo()
@@ -142,7 +142,7 @@ func (m *userInfoSubModel) renderUserInfo() string {
 		content += labelStyle.Render(f.label) + valueStyle.Render(f.fmt(val)) + "\n"
 	}
 
-	content += "\n" + helpStyle.Render("[Enter/Esc/q] 메뉴로 돌아가기")
+	content += "\n" + helpStyle.Render("[Enter/Esc] 메뉴로 돌아가기")
 	return content
 }
 

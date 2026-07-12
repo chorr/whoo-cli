@@ -177,7 +177,7 @@ func (m *balanceSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInOutKey(msg)
 	case balanceModeError:
 		switch ErrorAction(msg) {
-		case ActionBack, ActionExit:
+		case ActionBack:
 			return m, func() tea.Msg { return backToMenuMsg{} }
 		}
 	}
@@ -185,9 +185,9 @@ func (m *balanceSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *balanceSubModel) handleBSKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// BS 탭은 최상위: esc/q/enter 모두 메뉴 복귀
+	// BS 탭은 최상위: esc/enter → 메뉴 복귀 (q 미사용)
 	switch msg.String() {
-	case "q", "esc", "enter":
+	case "esc", "enter":
 		return m, func() tea.Msg { return backToMenuMsg{} }
 	case "2", "right", "l":
 		m.tab = balanceTabInOut
@@ -209,8 +209,6 @@ func (m *balanceSubModel) handleInOutSelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 			m.mode = balanceModeBS
 		}
 		return m, nil
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	case ActionMoveLeft:
 		if m.customStep == 0 {
 			m.tab = balanceTabBS
@@ -229,16 +227,15 @@ func (m *balanceSubModel) handleInOutSelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 		return m.confirmInOutPeriod()
 	}
 	// 직접입력 모드 전용: backspace, 숫자 타이핑
-	switch msg.String() {
-	case "backspace":
-		if m.periodCursor == 2 && len(m.customInput) > 0 {
-			m.customInput = m.customInput[:len(m.customInput)-1]
-		}
-	default:
-		if m.periodCursor == 2 && len(msg.String()) == 1 {
-			r := rune(msg.String()[0])
-			if r >= '0' && r <= '9' && len(m.customInput) < 8 {
-				m.customInput += msg.String()
+	if m.periodCursor == 2 {
+		switch msg.Type {
+		case tea.KeyBackspace, tea.KeyDelete:
+			m.customInput = backspaceRunes(m.customInput)
+		case tea.KeyRunes:
+			for _, r := range msg.Runes {
+				if r >= '0' && r <= '9' && len(m.customInput) < 8 {
+					m.customInput += string(r)
+				}
 			}
 		}
 	}
@@ -253,11 +250,10 @@ func (m *balanceSubModel) confirmInOutPeriod() (tea.Model, tea.Cmd) {
 	case 0: // 이번달
 		start = fmt.Sprintf("%d%02d01", now.Year(), now.Month())
 		end = now.Format("20060102")
-	case 1: // 지난달
-		last := now.AddDate(0, -1, 0)
-		start = fmt.Sprintf("%d%02d01", last.Year(), last.Month())
-		// 지난달 마지막 날
-		firstOfThis := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	case 1: // 지난달 (월말에서도 달 경계 유지)
+		firstOfThis := firstOfMonth(now)
+		lastStart := firstOfThis.AddDate(0, -1, 0)
+		start = lastStart.Format("20060102")
 		end = firstOfThis.AddDate(0, 0, -1).Format("20060102")
 	case 2: // 직접입력
 		if m.customStep == 0 {
@@ -292,8 +288,6 @@ func (m *balanceSubModel) handleInOutKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = balanceModeInOutSel
 		m.periodCursor = 0
 		return m, nil
-	case ActionExit:
-		return m, func() tea.Msg { return backToMenuMsg{} }
 	case ActionMoveLeft:
 		m.tab = balanceTabBS
 		m.mode = balanceModeBS
@@ -343,7 +337,7 @@ func (m *balanceSubModel) View() string {
 	case balanceModeError:
 		return titleStyle.Render("자산부채 현황") + "\n\n" +
 			errorStyle.Render("[오류] "+m.errMsg) + "\n\n" +
-			helpStyle.Render("[Enter/q] 메뉴로 돌아가기")
+			helpStyle.Render("[Enter/Esc] 메뉴로 돌아가기")
 	case balanceModeBS:
 		return m.renderBS()
 	case balanceModeInOutSel:
@@ -371,7 +365,7 @@ func (m *balanceSubModel) renderBS() string {
 
 	if m.bsResp == nil || (len(m.bsResp.Assets.Accounts) == 0 && len(m.bsResp.Liabilities.Accounts) == 0) {
 		b.WriteString("자산부채 데이터가 없습니다\n\n")
-		b.WriteString(helpStyle.Render("[2/→/l] In/Out  [Enter/q] 메뉴"))
+		b.WriteString(helpStyle.Render("[2/→/l] In/Out  [Enter/Esc] 메뉴"))
 		return b.String()
 	}
 
@@ -395,7 +389,7 @@ func (m *balanceSubModel) renderBS() string {
 
 	netWorth := m.bsResp.Assets.Total - m.bsResp.Liabilities.Total
 	b.WriteString(fmt.Sprintf("순자산: %s\n", FormatMoney(netWorth)))
-	b.WriteString("\n" + helpStyle.Render("[2/→/l] In/Out  [Enter/q] 메뉴"))
+	b.WriteString("\n" + helpStyle.Render("[2/→/l] In/Out  [Enter/Esc] 메뉴"))
 	return b.String()
 }
 
@@ -463,7 +457,7 @@ func (m *balanceSubModel) renderInOut() string {
 
 	m.writeInOutTable(&b)
 
-	b.WriteString("\n" + helpStyle.Render("[Tab] 자산/부채  [↑/↓/j/k] 이동  [r] 새로고침  [1/←] BS  [Esc] 기간선택  [q] 메뉴"))
+	b.WriteString("\n" + helpStyle.Render("[Tab] 자산/부채  [↑/↓/j/k] 이동  [r] 새로고침  [1/←] BS  [Esc] 기간선택"))
 	return b.String()
 }
 
