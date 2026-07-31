@@ -10,6 +10,9 @@ permissions:
 
 jobs:
   release:
+    # 공개 리포에서만 실행. wip에 동일 버전 태그를 달아도 goreleaser/시크릿 없이 실패하지 않게 함.
+    # (wip 태그는 버전 표식용이며, 바이너리 배포는 chorr/whoo-cli 전용)
+    if: github.repository == 'chorr/whoo-cli'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
