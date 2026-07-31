@@ -15,7 +15,7 @@ import (
 )
 
 // 버전 정보
-const Version = "1.0.0"
+const Version = "1.0.1"
 
 // RequireAuth는 인증 상태를 확인하고 미인증 시 안내 후 종료
 func RequireAuth(cfg *config.Config) {

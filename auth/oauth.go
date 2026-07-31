@@ -29,9 +29,10 @@ func NewOAuth(cfg *config.Config) *OAuth {
 }
 
 // RequestTokenResponse는 1단계 요청 토큰 응답
+// 현재 Whooing API는 token만 반환한다. signiture는 과거 응답 호환용(선택).
 type RequestTokenResponse struct {
 	Token     string `json:"token"`
-	Signiture string `json:"signiture"` // 원문 그대로
+	Signiture string `json:"signiture"` // 원문 그대로. 미반환 시 빈 문자열
 }
 
 // AccessTokenResponse는 3단계 액세스 토큰 응답
@@ -66,21 +67,27 @@ func (o *OAuth) RequestToken() (*RequestTokenResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("토큰 요청 실패: HTTP %d", resp.StatusCode)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("응답 읽기 실패: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("토큰 요청 실패: HTTP %d: %s", resp.StatusCode, truncateBody(body))
+	}
+
+	// API 오류 응답 체크 (code 필드가 있는 경우)
+	if err := checkOAuthAPIError(body); err != nil {
+		return nil, err
+	}
+
 	var result RequestTokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("응답 파싱 실패: %w", err)
+		return nil, fmt.Errorf("응답 파싱 실패: %w (body=%s)", err, truncateBody(body))
 	}
-	if result.Token == "" || result.Signiture == "" {
-		return nil, fmt.Errorf("토큰 응답이 비어 있습니다")
+	// token만 필수. signiture는 현재 API에서 반환하지 않음
+	if result.Token == "" {
+		return nil, fmt.Errorf("토큰 응답이 비어 있습니다: %s", truncateBody(body))
 	}
 
 	return &result, nil
@@ -94,7 +101,8 @@ func (o *OAuth) GetAuthorizationURL(token string) string {
 }
 
 // ExchangeToken는 3단계: PIN으로 최종 토큰 교환
-// https://whooing.com/app_auth/access_token?app_id={}&app_secret={}&token={}&signiture={}&pin={}
+// https://whooing.com/app_auth/access_token?app_id={}&app_secret={}&token={}&pin={}
+// signiture는 과거 API 호환용 선택 파라미터
 func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenResponse, error) {
 	// AppID와 AppSecret 가져오기
 	appID, err := config.GetAppID()
@@ -110,7 +118,10 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 	q.Set("app_id", appID)
 	q.Set("app_secret", appSecret)
 	q.Set("token", tempToken)
-	q.Set("signiture", signiture)
+	// 현재 request_token 응답에 signiture가 없으므로 있을 때만 전달
+	if signiture != "" {
+		q.Set("signiture", signiture)
+	}
 	q.Set("pin", pin)
 	reqURL := fmt.Sprintf("%s/app_auth/access_token?%s", baseURL, q.Encode())
 
@@ -126,27 +137,52 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 		return nil, fmt.Errorf("응답 읽기 실패: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("토큰 교환 실패: HTTP %d: %s", resp.StatusCode, truncateBody(body))
+	}
+
 	// API 오류 응답 체크
-	var apiCheck map[string]interface{}
-	if err := json.Unmarshal(body, &apiCheck); err == nil {
-		if code, ok := apiCheck["code"].(float64); ok && code != 200 {
-			message := ""
-			if msg, ok := apiCheck["message"].(string); ok {
-				message = msg
-			}
-			return nil, fmt.Errorf("API 오류 (code=%d): %s", int(code), message)
-		}
+	if err := checkOAuthAPIError(body); err != nil {
+		return nil, err
 	}
 
 	var result AccessTokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("응답 파싱 실패: %w", err)
+		return nil, fmt.Errorf("응답 파싱 실패: %w (body=%s)", err, truncateBody(body))
 	}
 	if result.Token == "" || result.TokenSecret == "" {
-		return nil, fmt.Errorf("액세스 토큰 응답이 비어 있습니다 (PIN을 확인하세요)")
+		return nil, fmt.Errorf("액세스 토큰 응답이 비어 있습니다 (PIN을 확인하세요): %s", truncateBody(body))
 	}
 
 	return &result, nil
+}
+
+// checkOAuthAPIError는 OAuth 엔드포인트의 {code, message} 오류 응답을 검사한다.
+// code 필드가 없거나 200이면 nil.
+func checkOAuthAPIError(body []byte) error {
+	var apiCheck map[string]interface{}
+	if err := json.Unmarshal(body, &apiCheck); err != nil {
+		return nil
+	}
+	code, ok := apiCheck["code"].(float64)
+	if !ok || code == 200 {
+		return nil
+	}
+	message := ""
+	if msg, ok := apiCheck["message"].(string); ok {
+		message = msg
+	}
+	return fmt.Errorf("API 오류 (code=%d): %s", int(code), message)
+}
+
+// truncateBody는 에러 메시지용으로 응답 본문을 짧게 자른다.
+func truncateBody(body []byte) string {
+	const max = 200
+	s := string(body)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // CompleteAuth는 전체 인증 플로우 완료 후 설정 저장

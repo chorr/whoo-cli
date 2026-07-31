@@ -2,7 +2,7 @@
 # whoo-cli 설치 스크립트
 # 사용법:
 #   curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v1.0.0
+#   curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v1.0.1
 
 set -euo pipefail
 

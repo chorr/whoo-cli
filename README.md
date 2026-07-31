@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | ba
 특정 버전 설치:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v1.0.0
+curl -fsSL https://raw.githubusercontent.com/chorr/whoo-cli/main/install.sh | bash -s -- v1.0.1
 ```
 
 `~/.local/bin/whoo`에 설치됩니다.
