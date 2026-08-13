@@ -56,6 +56,20 @@ whoo auth --pin <PIN>    # PIN으로 토큰 교환
 
 인증 토큰은 `~/.config/whoo/config.json`에 저장됩니다.
 
+## 개발
+
+Go 1.22 이상이 필요합니다.
+
+```bash
+cp .env.example .env
+# .env에 본인의 Whooing 앱 자격 증명 입력
+
+make dev
+make check
+```
+
+`.env`와 로컬 빌드 결과물은 Git에서 제외됩니다. 실제 앱 자격 증명과 인증 토큰을 커밋하지 마세요.
+
 ## 지원 플랫폼
 
 | OS | Architecture |
