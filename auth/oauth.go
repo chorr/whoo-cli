@@ -193,5 +193,17 @@ func (o *OAuth) CompleteAuth(token, tokenSecret string) error {
 	}
 	o.config.Token = token
 	o.config.TokenSecret = tokenSecret
+	o.config.PendingRequestToken = ""
+	o.config.PendingSigniture = ""
+	return o.config.Save()
+}
+
+// SavePendingRequest는 PIN 교환 전에 request token을 설정 파일에 저장
+func (o *OAuth) SavePendingRequest(token, signiture string) error {
+	if token == "" {
+		return fmt.Errorf("빈 요청 토큰은 저장할 수 없습니다")
+	}
+	o.config.PendingRequestToken = token
+	o.config.PendingSigniture = signiture
 	return o.config.Save()
 }

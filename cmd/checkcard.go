@@ -14,6 +14,10 @@ import (
 
 // RunCheckcard는 checkcard CLI 커맨드 실행
 func RunCheckcard(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showCheckcardHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -45,12 +49,17 @@ func RunCheckcard(cfg *config.Config, args []string) {
 }
 
 func showCheckcardHelp() {
-	fmt.Println("사용법: whoo checkcard [옵션]")
+	fmt.Println("사용법: whoo checkcard [플래그]")
 	fmt.Println()
-	fmt.Println("체크카드 사용내역 조회")
+	fmt.Println("체크카드 사용내역을 JSON으로 출력합니다.")
 	fmt.Println()
-	fmt.Println("옵션:")
+	fmt.Println("플래그:")
 	fmt.Println("  --account-id    체크카드 항목 ID (생략 시 전체)")
 	fmt.Println("  --from          시작 연월 YYYYMM (예: 202601)")
 	fmt.Println("  --to            종료 연월 YYYYMM (예: 202612)")
+	fmt.Println("  -h, --help      도움말")
+	fmt.Println()
+	fmt.Println("예시:")
+	fmt.Println("  whoo checkcard")
+	fmt.Println("  whoo checkcard --from 202601 --to 202612")
 }

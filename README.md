@@ -29,19 +29,30 @@ whoo version
 # CLI 모드 (JSON 출력)
 whoo user          # 유저 정보
 whoo sections      # 섹션 목록
-whoo accounts      # 항목 목록
+whoo accounts      # 항목 메타 (잔액 없음)
+whoo bs            # 자산/부채 잔액
+whoo inout         # 기간 자금증감
 whoo entries       # 거래내역
 whoo help          # 도움말
 ```
 
 ## 인증
 
-최초 실행 시 OAuth PIN 인증이 필요합니다:
+최초 실행 시 OAuth PIN 인증이 필요합니다.
 
-1. `whoo` 실행
-2. 브라우저에서 인증 URL 접속
-3. 후잉 계정으로 로그인 후 PIN 번호 확인
-4. PIN 번호 입력
+TTY가 있는 터미널:
+
+```bash
+whoo auth
+```
+
+에이전트/헤드리스:
+
+```bash
+whoo auth --url          # 인증 URL을 stdout에 출력
+whoo auth --pin <PIN>    # PIN으로 토큰 교환
+# 또는 WHOOING_PIN=<PIN> whoo auth
+```
 
 인증 토큰은 `~/.config/whoo/config.json`에 저장됩니다.
 

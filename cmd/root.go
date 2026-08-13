@@ -15,7 +15,7 @@ import (
 )
 
 // 버전 정보
-const Version = "1.0.1"
+const Version = "1.0.2"
 
 // RequireAuth는 인증 상태를 확인하고 미인증 시 안내 후 종료
 func RequireAuth(cfg *config.Config) {
@@ -140,8 +140,8 @@ func ShowHelp() {
 	fmt.Println("사용법: whoo [command]")
 	fmt.Println()
 	fmt.Println("커맨드:")
-	fmt.Println("  (없음)         인터랙티브 TUI 실행")
-	fmt.Println("  auth           OAuth 인증")
+	fmt.Println("  (없음)         인터랙티브 TUI 실행 (TTY 필요)")
+	fmt.Println("  auth           OAuth 인증 (auth --help 참조)")
 	fmt.Println("  status         인증/설정 상태 확인")
 	fmt.Println("  user           유저 정보 조회")
 	fmt.Println("  user_logs      유저 로그 조회")
@@ -150,7 +150,8 @@ func ShowHelp() {
 	fmt.Println("  entries        거래내역 (entries help 참조)")
 	fmt.Println("  frequent       자주입력 관리 (frequent help 참조)")
 	fmt.Println("  monthly        월별입력 관리 (monthly help 참조)")
-	fmt.Println("  inout          자금증감 조회 (inout help 참조)")
+	fmt.Println("  inout          자금증감 조회 (inout --help 참조)")
+	fmt.Println("  bs             자산/부채 잔액 (bs --help 참조)")
 	fmt.Println("  budget         예산 관리 (budget help 참조)")
 	fmt.Println("  budget-goal    예산 목표")
 	fmt.Println("  goal           자본 목표")
@@ -163,12 +164,17 @@ func ShowHelp() {
 	fmt.Println("  s = sections, a = accounts, e = entries")
 	fmt.Println("  f = frequent, m = monthly, b = bill, cc = checkcard, io = inout")
 	fmt.Println()
+	fmt.Println("help, --help, -h 는 모든 커맨드에서 예약어입니다. 인증·API·TUI를 실행하지 않습니다.")
+	fmt.Println()
 	fmt.Println("예시:")
 	fmt.Println("  whoo                   TUI 실행")
+	fmt.Println("  whoo auth --url        인증 URL 출력 (헤드리스)")
 	fmt.Println("  whoo entries           이번 달 거래내역")
-	fmt.Println("  whoo accounts assets   자산 항목 목록")
+	fmt.Println("  whoo accounts assets   자산 항목 메타 (잔액 없음)")
+	fmt.Println("  whoo bs                자산/부채 잔액")
+	fmt.Println("  whoo inout --from 20260801 --to 20260813")
 	fmt.Println("  whoo sections          섹션 목록")
-	fmt.Println("  whoo budget list       예산 조회")
+	fmt.Println("  whoo budget get expenses")
 }
 
 // ShowVersion은 버전만 출력

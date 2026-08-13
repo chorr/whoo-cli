@@ -14,6 +14,10 @@ import (
 
 // RunAccounts는 accounts CLI 커맨드 실행
 func RunAccounts(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showAccountsHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -33,8 +37,6 @@ func RunAccounts(cfg *config.Config, args []string) {
 		runAccountsExists(cfg, args[1:])
 	case "sort":
 		runAccountsSort(cfg, args[1:])
-	case "help", "--help", "-h":
-		showAccountsHelp()
 	default:
 		account := args[0]
 		if len(args) == 1 {
@@ -160,11 +162,11 @@ func runAccountsEdit(cfg *config.Config, args []string) {
 
 	var acc struct {
 		Results struct {
-			Title     string `json:"title"`
-			OpenDate  int    `json:"open_date"`
-			CloseDate int    `json:"close_date"`
-			Memo      string `json:"memo"`
-			Category  string `json:"category"`
+			Title       string `json:"title"`
+			OpenDate    int    `json:"open_date"`
+			CloseDate   int    `json:"close_date"`
+			Memo        string `json:"memo"`
+			Category    string `json:"category"`
 			OptUseDate  string `json:"opt_use_date"`
 			OptPayDate  int    `json:"opt_pay_date"`
 			OptPayAccID string `json:"opt_pay_account_id"`
@@ -329,6 +331,9 @@ func runAccountsSort(cfg *config.Config, args []string) {
 func showAccountsHelp() {
 	fmt.Println("사용법: whoo accounts [command]")
 	fmt.Println()
+	fmt.Println("항목 메타(title, category, 사용기간)를 JSON으로 출력합니다.")
+	fmt.Println("잔액은 whoo bs, 기간 증감은 whoo inout 을 사용하세요.")
+	fmt.Println()
 	fmt.Println("커맨드:")
 	fmt.Println("  (없음)                              전체 항목 목록")
 	fmt.Println("  add <type> --title <이름> [옵션...]  항목 생성")
@@ -358,6 +363,9 @@ func showAccountsHelp() {
 	fmt.Println("  --force   거래 있어도 강제 삭제 (거래 항목이 x0으로 변환됨)")
 	fmt.Println()
 	fmt.Println("예시:")
+	fmt.Println("  whoo accounts assets")
+	fmt.Println("  whoo bs")
+	fmt.Println("  whoo inout --from 20260801 --to 20260813")
 	fmt.Println("  whoo accounts add assets --title \"토스\" --category normal")
 	fmt.Println("  whoo accounts add liabilities --title \"신한카드\" --category creditcard --opt-use-date pp1 --opt-pay-date 25 --opt-pay-account x2")
 	fmt.Println("  whoo accounts edit assets x2 --title \"새 이름\"")

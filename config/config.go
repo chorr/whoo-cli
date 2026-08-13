@@ -132,6 +132,10 @@ type Config struct {
 	Token       string `json:"token"`
 	TokenSecret string `json:"token_secret"`
 	SectionID   string `json:"section_id"`
+
+	// PendingRequestToken은 headless OAuth의 request token (PIN 교환 전)
+	PendingRequestToken string `json:"pending_request_token,omitempty"`
+	PendingSigniture    string `json:"pending_signiture,omitempty"`
 }
 
 // ComputeSigniture는 API 호출용 signiture를 계산
@@ -234,4 +238,3 @@ func LoadWithTestTokens() (*Config, error) {
 
 	return cfg, nil
 }
-

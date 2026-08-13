@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"whoo-cli/config"
@@ -11,7 +12,13 @@ import (
 
 // RunUserLogs는 user_logs CLI 커맨드 실행
 // API 응답을 파싱하지 않고 JSON 원본을 그대로 출력
-func RunUserLogs(cfg *config.Config) {
+func RunUserLogs(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		fmt.Println("사용법: whoo user_logs")
+		fmt.Println()
+		fmt.Println("유저 로그를 JSON으로 출력합니다.")
+		return
+	}
 	RequireAuth(cfg)
 
 	client := NewClient(cfg)

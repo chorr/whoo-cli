@@ -43,19 +43,17 @@ api/whooing.go      ← API 메서드 (공통)
 
 ### 3. 커맨드 라우팅
 
-`main.go`의 switch 문에서 서브커맨드를 분기한다:
+`main.go`의 switch 문에서 서브커맨드를 분기한다.
 
-```go
-switch os.Args[1] {
-case "user":
-    cmd.RunUser(cfg)
-case "config":
-    showConfigStatus(cfg)
-// ... 추가 CLI 커맨드
-default:
-    cmd.RunApp(cfg) // TUI 실행
-}
-```
+인자가 없고 TTY가 없으면 TUI를 열지 않고 stderr 안내 후 종료한다.
+
+### 3.1 help 예약어
+
+`help`, `--help`, `-h`는 모든 깊이에서 예약어다.
+
+- 이 경로에서는 `RequireAuth` / `RequireSection` / API / TUI를 실행하지 않는다
+- TTY가 없어도 exit 0으로 한국어 사용법을 출력한다
+- Go `flag` 기본 영어 Usage를 그대로 쓰지 않는다
 
 ### 4. CLI 핸들러 파일 규칙
 
@@ -87,8 +85,11 @@ default:
 | `whoo user` | 완료 | 유저 정보 조회 |
 | `whoo user_logs` | 완료 | 유저 로그 조회 |
 | `whoo sections` | 완료 | 섹션 관리 (서브커맨드) |
-| `whoo accounts` | 완료 | 항목 관리 (서브커맨드) |
+| `whoo accounts` | 완료 | 항목 메타 (잔액 없음) |
+| `whoo bs` | 완료 | 자산/부채 잔액 (raw JSON) |
+| `whoo inout` | 완료 | 자금증감 (raw JSON, 구조체 파싱 없음) |
 | `whoo entries` | 완료 | 거래내역 조회 (서브커맨드 + 플래그) |
+| `whoo auth` | 완료 | TUI 또는 `--url`/`--pin` 헤드리스 |
 | `whoo status` | 완료 | 인증/설정 상태 확인 |
 | `whoo help` | 완료 | 도움말 표시 |
 

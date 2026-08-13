@@ -16,6 +16,10 @@ import (
 
 // RunFrequent는 frequent CLI 커맨드 실행
 func RunFrequent(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showFrequentHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -37,8 +41,6 @@ func RunFrequent(cfg *config.Config, args []string) {
 		runFrequentSort(cfg, args[1:])
 	case "use":
 		runFrequentUse(cfg, args[1:])
-	case "help", "--help", "-h":
-		showFrequentHelp()
 	default:
 		showFrequentHelp()
 	}

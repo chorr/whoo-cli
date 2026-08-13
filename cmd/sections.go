@@ -15,6 +15,10 @@ import (
 
 // RunSections는 sections CLI 커맨드 실행
 func RunSections(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showSectionsHelp()
+		return
+	}
 	RequireAuth(cfg)
 
 	if len(args) == 0 {
@@ -40,8 +44,6 @@ func RunSections(cfg *config.Config, args []string) {
 			os.Exit(1)
 		}
 		runSectionsSet(cfg, args[1])
-	case "help", "--help", "-h":
-		showSectionsHelp()
 	default:
 		runSectionsGet(cfg, args[0])
 	}
