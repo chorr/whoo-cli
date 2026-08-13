@@ -98,6 +98,7 @@ func (m *authSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tokenResp = msg
 		m.authURL = m.oauth.GetAuthorizationURL(msg.Token)
 		m.state = authStateWaitingForPIN
+		_ = m.oauth.SavePendingRequest(msg.Token, msg.Signiture)
 		openBrowser(m.authURL)
 		return m, nil
 

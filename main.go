@@ -12,51 +12,59 @@ import (
 )
 
 func main() {
-	// 설정 로드
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[오류] 설정 로드 실패: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 인자 없이 실행 시 통합 앱 실행
 	if len(os.Args) < 2 {
+		if !cmd.HasInteractiveTTY() {
+			fmt.Fprintln(os.Stderr, "[오류] TUI는 터미널(TTY)이 필요합니다")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "  whoo help          커맨드 목록")
+			fmt.Fprintln(os.Stderr, "  whoo status        인증 상태")
+			fmt.Fprintln(os.Stderr, "  whoo auth --help   인증 방법")
+			os.Exit(1)
+		}
 		cmd.RunApp(cfg)
 		return
 	}
 
-	// 서브커맨드 디스패치
+	args := os.Args[2:]
 	switch os.Args[1] {
 	case "auth", "login":
-		cmd.RunApp(cfg)
+		cmd.RunAuth(cfg, args)
 	case "user":
-		cmd.RunUser(cfg)
+		cmd.RunUser(cfg, args)
 	case "user_logs":
-		cmd.RunUserLogs(cfg)
+		cmd.RunUserLogs(cfg, args)
 	case "sections", "s":
-		cmd.RunSections(cfg, os.Args[2:])
+		cmd.RunSections(cfg, args)
 	case "accounts", "a":
-		cmd.RunAccounts(cfg, os.Args[2:])
+		cmd.RunAccounts(cfg, args)
 	case "entries", "e":
-		cmd.RunEntries(cfg, os.Args[2:])
+		cmd.RunEntries(cfg, args)
 	case "frequent", "freq", "f":
-		cmd.RunFrequent(cfg, os.Args[2:])
+		cmd.RunFrequent(cfg, args)
 	case "monthly", "month", "m":
-		cmd.RunMonthly(cfg, os.Args[2:])
+		cmd.RunMonthly(cfg, args)
 	case "inout", "io":
-		cmd.RunInOut(cfg, os.Args[2:])
+		cmd.RunInOut(cfg, args)
+	case "bs":
+		cmd.RunBS(cfg, args)
 	case "budget":
-		cmd.RunBudget(cfg, os.Args[2:])
+		cmd.RunBudget(cfg, args)
 	case "budget-goal":
-		cmd.RunBudgetGoal(cfg, os.Args[2:])
+		cmd.RunBudgetGoal(cfg, args)
 	case "goal":
-		cmd.RunGoal(cfg, os.Args[2:])
+		cmd.RunGoal(cfg, args)
 	case "bill", "b":
-		cmd.RunBill(cfg, os.Args[2:])
+		cmd.RunBill(cfg, args)
 	case "checkcard", "cc":
-		cmd.RunCheckcard(cfg, os.Args[2:])
+		cmd.RunCheckcard(cfg, args)
 	case "status":
-		cmd.RunStatus(cfg)
+		cmd.RunStatus(cfg, args)
 	case "version", "--version", "-v":
 		cmd.ShowVersion()
 	case "help", "--help", "-h":

@@ -20,6 +20,10 @@ import (
 
 // RunBudget는 budget CLI 커맨드 실행
 func RunBudget(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showBudgetHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -35,8 +39,6 @@ func RunBudget(cfg *config.Config, args []string) {
 		runBudgetSet(cfg, args[1:])
 	case "reset":
 		runBudgetReset(cfg, args[1:])
-	case "help", "--help", "-h":
-		showBudgetHelp()
 	default:
 		fmt.Fprintf(os.Stderr, "[오류] 알 수 없는 서브커맨드: %s\n", args[0])
 		showBudgetHelp()
@@ -151,6 +153,10 @@ func showBudgetHelp() {
 
 // RunBudgetGoal는 budget-goal CLI 커맨드 실행
 func RunBudgetGoal(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showBudgetGoalHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -166,8 +172,6 @@ func RunBudgetGoal(cfg *config.Config, args []string) {
 		runBudgetGoalSet(cfg, args[1:])
 	case "reset":
 		runBudgetGoalReset(cfg)
-	case "help", "--help", "-h":
-		showBudgetGoalHelp()
 	default:
 		fmt.Fprintf(os.Stderr, "[오류] 알 수 없는 서브커맨드: %s\n", args[0])
 		showBudgetGoalHelp()
@@ -248,6 +252,10 @@ func showBudgetGoalHelp() {
 
 // RunGoal는 goal CLI 커맨드 실행
 func RunGoal(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showGoalHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -261,8 +269,6 @@ func RunGoal(cfg *config.Config, args []string) {
 		runGoalGet(cfg, args[1:])
 	case "set":
 		runGoalSet(cfg, args[1:])
-	case "help", "--help", "-h":
-		showGoalHelp()
 	default:
 		fmt.Fprintf(os.Stderr, "[오류] 알 수 없는 서브커맨드: %s\n", args[0])
 		showGoalHelp()
@@ -297,7 +303,7 @@ func runGoalGet(cfg *config.Config, args []string) {
 // ymAmounts는 반복 플래그 --ym YYYYMM=amount 파싱용
 type ymAmounts []string
 
-func (y *ymAmounts) String() string  { return strings.Join(*y, ",") }
+func (y *ymAmounts) String() string     { return strings.Join(*y, ",") }
 func (y *ymAmounts) Set(v string) error { *y = append(*y, v); return nil }
 
 func runGoalSet(cfg *config.Config, args []string) {

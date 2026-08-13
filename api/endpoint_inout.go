@@ -4,9 +4,12 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 )
 
 // ─── 데이터 모델 ──────────────────────────────────────────────
@@ -28,8 +31,43 @@ type InOutResponse struct {
 
 // InOutGroup은 in_out 응답의 계정 타입별 그룹
 type InOutGroup struct {
-	Total    InOutValues    `json:"total"`
-	Accounts []InOutAccount `json:"accounts"`
+	Total    InOutValues   `json:"total"`
+	Accounts InOutAccounts `json:"accounts"`
+}
+
+// InOutAccounts는 항목별 증감 목록.
+// Whooing 응답은 배열이 아니라 {"x1": {in,out,margin}, ...} 객체인 경우가 있다.
+type InOutAccounts []InOutAccount
+
+func (a *InOutAccounts) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		*a = nil
+		return nil
+	}
+	if data[0] == '[' {
+		var arr []InOutAccount
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return err
+		}
+		*a = arr
+		return nil
+	}
+
+	var obj map[string]InOutAccount
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	list := make(InOutAccounts, 0, len(obj))
+	for id, acc := range obj {
+		if acc.AccountID == "" {
+			acc.AccountID = id
+		}
+		list = append(list, acc)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].AccountID < list[j].AccountID })
+	*a = list
+	return nil
 }
 
 // InOutAccount는 개별 계정 항목의 증감 데이터
@@ -49,12 +87,8 @@ type InOutValues struct {
 
 // ─── API 메서드 ───────────────────────────────────────────────
 
-// GetInOut는 자금증감 조회
-// Account/AccountID 유무에 따라 URL 경로를 조립:
-//   - "" / ""           → /in_out.json
-//   - "assets" / ""     → /in_out/assets.json
-//   - "assets" / "x1"   → /in_out/assets/x1.json
-func (c *WhooingClient) GetInOut(q InOutQuery) (*InOutResponse, error) {
+// GetInOutRaw는 자금증감 조회 (raw JSON, CLI용)
+func (c *WhooingClient) GetInOutRaw(q InOutQuery) ([]byte, error) {
 	endpoint := buildInOutEndpoint(q)
 
 	params := url.Values{}
@@ -66,7 +100,16 @@ func (c *WhooingClient) GetInOut(q InOutQuery) (*InOutResponse, error) {
 		params.Set("end_date", q.EndDate)
 	}
 
-	data, err := c.doRequest(http.MethodGet, endpoint, params)
+	return c.doRequest(http.MethodGet, endpoint, params)
+}
+
+// GetInOut는 자금증감 조회 (TUI용 구조체)
+// Account/AccountID 유무에 따라 URL 경로를 조립:
+//   - "" / ""           → /in_out.json
+//   - "assets" / ""     → /in_out/assets.json
+//   - "assets" / "x1"   → /in_out/assets/x1.json
+func (c *WhooingClient) GetInOut(q InOutQuery) (*InOutResponse, error) {
+	data, err := c.GetInOutRaw(q)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +124,7 @@ func (c *WhooingClient) GetInOut(q InOutQuery) (*InOutResponse, error) {
 		return &InOutResponse{
 			Assets: InOutGroup{
 				Total: single,
-				Accounts: []InOutAccount{{
+				Accounts: InOutAccounts{{
 					AccountID: q.AccountID,
 					In:        single.In,
 					Out:       single.Out,

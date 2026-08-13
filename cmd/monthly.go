@@ -16,6 +16,10 @@ import (
 
 // RunMonthly는 monthly CLI 커맨드 실행
 func RunMonthly(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showMonthlyHelp()
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -37,8 +41,6 @@ func RunMonthly(cfg *config.Config, args []string) {
 		runMonthlySort(cfg, args[1:])
 	case "pay", "use":
 		runMonthlyPay(cfg, args[1:])
-	case "help", "--help", "-h":
-		showMonthlyHelp()
 	default:
 		showMonthlyHelp()
 	}

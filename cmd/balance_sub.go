@@ -61,16 +61,16 @@ type balanceSubModel struct {
 	endDate string
 
 	// In/Out 탭
-	periodCursor  int // 0=이번달 1=지난달 2=직접입력
-	customFrom    string
-	customTo      string
-	customInput   string
-	customStep    int // 0=from 1=to
-	inoutResp     *api.InOutResponse
+	periodCursor   int // 0=이번달 1=지난달 2=직접입력
+	customFrom     string
+	customTo       string
+	customInput    string
+	customStep     int // 0=from 1=to
+	inoutResp      *api.InOutResponse
 	inoutStartDate string
 	inoutEndDate   string
-	rowCursor     int // In/Out 테이블 커서 (assets.accounts 행)
-	inoutSection  int // 0=assets 1=liabilities
+	rowCursor      int // In/Out 테이블 커서 (assets.accounts 행)
+	inoutSection   int // 0=assets 1=liabilities
 }
 
 // newBalanceSubModel은 새로운 자산부채 모델을 생성
@@ -323,9 +323,9 @@ func (m *balanceSubModel) currentInOutAccounts() []api.InOutAccount {
 		return nil
 	}
 	if m.inoutSection == 0 {
-		return m.inoutResp.Assets.Accounts
+		return []api.InOutAccount(m.inoutResp.Assets.Accounts)
 	}
-	return m.inoutResp.Liabilities.Accounts
+	return []api.InOutAccount(m.inoutResp.Liabilities.Accounts)
 }
 
 // ─── View ────────────────────────────────────────────────────

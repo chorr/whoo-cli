@@ -45,22 +45,27 @@ TUI는 `cmd/app.go`의 `appModel`이 상태 머신 역할을 하며, 화면별 �
 ### 명령어 구조
 
 ```
-whoo              → TUI 실행
-whoo auth         → TUI 실행 (인증 플로우)
+whoo              → TUI 실행 (TTY 필요)
+whoo auth         → 인증 (TTY면 TUI, 없으면 URL 출력)
+whoo auth --url   → 인증 URL stdout 출력 (헤드리스)
+whoo auth --pin   → PIN으로 토큰 교환 (WHOOING_PIN 도 가능)
 whoo status       → 인증/설정 상태 확인 (CLI)
 whoo user         → 유저 정보 JSON 출력
 whoo user_logs    → 유저 로그 JSON 출력
 whoo sections, s  → 섹션 관리 (CLI)
-whoo accounts, a  → 항목 관리 (CLI)
+whoo accounts, a  → 항목 메타 (잔액 없음)
+whoo bs           → 자산/부채 잔액 JSON
+whoo inout, io    → 기간 자금증감 JSON
 whoo entries, e   → 거래내역 조회 (CLI)
 whoo frequent, f  → 자주 쓰는 거래 (CLI)
 whoo monthly, m   → 월별 요약 (CLI)
-whoo inout, io    → 수입/지출 (CLI)
 whoo budget       → 예산 (CLI)
 whoo bill, b      → 청구서 (CLI)
 whoo checkcard, cc → 카드 확인 (CLI)
 whoo help         → 도움말
 ```
+
+`help`, `--help`, `-h`는 모든 깊이에서 예약어입니다. 인증·API·TUI를 실행하지 않습니다.
 
 ### 패키지 의존 방향
 
@@ -134,6 +139,7 @@ main.go → cmd/app.go → cmd/*_sub.go → api/ → config/
 - Whooing API 구조를 모르면 추측하지 말 것 — `docs/api-*.md` 참조
 - 서브 모델 간 직접 참조 금지 (appModel을 통해 통신)
 - CLI에서 API 응답을 별도 파싱하지 말 것 (raw JSON 출력)
+- `help`/`--help`/`-h` 경로에서 RequireAuth·API·TUI를 실행하지 말 것
 - 서브모델 View()에서 공통 스타일 로컬 재선언 금지
 
 ## Build & Development
@@ -149,8 +155,11 @@ go vet ./...
 go test ./...
 
 # 실행
-./whoo              # TUI
+./whoo              # TUI (TTY 필요)
 ./whoo status       # 상태 확인
+./whoo auth --help  # 헤드리스 인증 방법
+./whoo bs           # 자산/부채 잔액 (JSON)
+./whoo inout        # 자금증감 (JSON)
 ./whoo entries      # 거래내역 (JSON)
 ```
 
@@ -180,7 +189,7 @@ checksums.txt
 |----------|------|------|
 | `WHOOING_APP_ID` | 후잉 앱 ID (로컬 빌드 시) | 로컬 빌드 시 |
 | `WHOOING_APP_SECRET` | 후잉 앱 Secret (로컬 빌드 시) | 로컬 빌드 시 |
-| `WHOOING_PIN` | OAuth PIN (자동 인증용, 선택) | 아니오 |
+| `WHOOING_PIN` | OAuth PIN (`whoo auth --pin` 과 동일, 헤드리스 인증) | 아니오 |
 
 ## External References
 
@@ -191,8 +200,8 @@ checksums.txt
 
 ## Notes
 
-- 설정 파일: `~/.config/whoo-cli/config.json`
-- Config 저장 항목: `token`, `token_secret`, `section_id`
+- 설정 파일: `~/.config/whoo/config.json`
+- Config 저장 항목: `token`, `token_secret`, `section_id` (헤드리스 인증 중 `pending_request_token`)
 - OAuth PIN 방식: RequestToken → Authorize → ExchangeToken
 - TUI 메인 메뉴: 거래내역, 거래 입력, 자산/부채, 섹션 변경, 사용자 정보, 섹션 관리, 항목 관리, 흐름 분석, 카드 관리, 예산/목표
 - CLI 모드: API 응답 raw JSON pretty-print (`.json` 포맷 사용)

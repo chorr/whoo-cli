@@ -549,15 +549,19 @@ func (c *WhooingClient) GetEntries(sectionID, startDate, endDate string, limit i
 	return resp.Rows, nil
 }
 
+// GetBSRaw는 자산부채(Balance Sheet) 조회 (raw JSON, CLI용)
+func (c *WhooingClient) GetBSRaw(sectionID, endDate string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("section_id", sectionID)
+	params.Set("end_date", endDate)
+	return c.doRequest(http.MethodGet, "/bs.json_array", params)
+}
+
 // GetBS는 자산부채(Balance Sheet) 조회
 // GET /api/bs.json_array?section_id={id}&end_date={YYYYMMDD}
 // 실제 응답 results: {"assets": {"total": N, "accounts": [...]}, "liabilities": {...}}
 func (c *WhooingClient) GetBS(sectionID, endDate string) (*BSResponse, error) {
-	params := url.Values{}
-	params.Set("section_id", sectionID)
-	params.Set("end_date", endDate)
-
-	data, err := c.doRequest(http.MethodGet, "/bs.json_array", params)
+	data, err := c.GetBSRaw(sectionID, endDate)
 	if err != nil {
 		return nil, err
 	}
@@ -720,4 +724,3 @@ func (c *WhooingClient) GetLatestItems(sectionID string) ([]byte, error) {
 	params.Set("section_id", sectionID)
 	return c.doRequest(http.MethodGet, "/entries/latest_items.json", params)
 }
-

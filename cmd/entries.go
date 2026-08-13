@@ -17,6 +17,10 @@ import (
 
 // RunEntries는 entries CLI 커맨드 실행
 func RunEntries(cfg *config.Config, args []string) {
+	if wantsHelp(args) {
+		showEntriesHelpFor(args)
+		return
+	}
 	RequireAuth(cfg)
 	RequireSection(cfg)
 
@@ -46,8 +50,6 @@ func RunEntries(cfg *config.Config, args []string) {
 		runEntriesChanges(cfg, args[1:])
 	case "outside":
 		runEntriesOutside(cfg, args[1:])
-	case "help", "--help", "-h":
-		showEntriesHelp()
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			runEntriesList(cfg, args)
@@ -479,6 +481,35 @@ func runEntriesOutside(cfg *config.Config, args []string) {
 		os.Exit(1)
 	}
 	printJSON(data)
+}
+
+// showEntriesHelpFor는 서브커맨드별 도움말. help 예약어는 여기까지이고 API를 치지 않는다.
+func showEntriesHelpFor(args []string) {
+	if len(args) > 0 && !isHelpArg(args[0]) {
+		switch args[0] {
+		case "flow":
+			showEntriesFlowHelp()
+			return
+		}
+	}
+	showEntriesHelp()
+}
+
+func showEntriesFlowHelp() {
+	fmt.Println("사용법: whoo entries flow [플래그]")
+	fmt.Println()
+	fmt.Println("계정 또는 항목의 흐름 분석을 JSON으로 출력합니다.")
+	fmt.Println()
+	fmt.Println("플래그:")
+	fmt.Println("  --from         시작 날짜 YYYYMMDD (필수)")
+	fmt.Println("  --to           종료 날짜 YYYYMMDD (필수)")
+	fmt.Println("  --account      계정 (flow_of_account)")
+	fmt.Println("  --account-id   항목 ID (flow_of_account_id)")
+	fmt.Println("  -h, --help     도움말")
+	fmt.Println()
+	fmt.Println("예시:")
+	fmt.Println("  whoo entries flow --from 20260101 --to 20260131 --account expenses")
+	fmt.Println("  whoo entries flow --from 20260101 --to 20260131 --account-id x12")
 }
 
 // showEntriesHelp는 entries 서브커맨드 도움말 출력
