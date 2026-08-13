@@ -32,6 +32,8 @@ func RunInOut(cfg *config.Config, args []string) {
 	from := fs.String("from", "", "시작일 YYYYMMDD (기본: 이번달 1일)")
 	to := fs.String("to", "", "종료일 YYYYMMDD (기본: 오늘)")
 	if err := fs.Parse(args); err != nil {
+		PrintError("%v", err)
+		showInOutHelp()
 		os.Exit(1)
 	}
 

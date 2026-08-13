@@ -32,6 +32,15 @@ func RunAuth(cfg *config.Config, args []string) {
 	}
 
 	pin := strings.TrimSpace(*pinFlag)
+	if *urlOnly {
+		if pin != "" {
+			PrintError("--url 과 --pin 은 함께 사용할 수 없습니다")
+			showAuthHelp()
+			os.Exit(1)
+		}
+		runAuthPrintURL(cfg)
+		return
+	}
 	if pin == "" {
 		pin = strings.TrimSpace(os.Getenv("WHOOING_PIN"))
 	}
@@ -40,7 +49,7 @@ func RunAuth(cfg *config.Config, args []string) {
 		runAuthExchangePIN(cfg, pin)
 		return
 	}
-	if *urlOnly || !HasInteractiveTTY() {
+	if !HasInteractiveTTY() {
 		runAuthPrintURL(cfg)
 		return
 	}

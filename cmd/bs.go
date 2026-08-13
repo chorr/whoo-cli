@@ -28,6 +28,8 @@ func RunBS(cfg *config.Config, args []string) {
 	fs.Usage = showBSHelp
 	end := fs.String("end", "", "기준일 YYYYMMDD (기본: 오늘)")
 	if err := fs.Parse(args); err != nil {
+		PrintError("%v", err)
+		showBSHelp()
 		os.Exit(1)
 	}
 
