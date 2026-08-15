@@ -23,6 +23,7 @@ const (
 	sectionManageModeAdd
 	sectionManageModeEdit
 	sectionManageModeConfirmDelete
+	sectionManageModeSort
 	sectionManageModeLoading
 	sectionManageModeError
 )
@@ -76,6 +77,9 @@ type sectionManageSubModel struct {
 	formMemo     string
 	textInput    string
 	editingID    string
+
+	// 정렬 모드
+	sorting sortState
 }
 
 const (
@@ -151,6 +155,8 @@ func (m *sectionManageSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFormKey(msg)
 	case sectionManageModeConfirmDelete:
 		return m.handleDeleteKey(msg)
+	case sectionManageModeSort:
+		return m.handleSortKey(msg)
 	case sectionManageModeError:
 		// enter는 재시도, esc는 상위 복귀
 		if msg.Type == tea.KeyEnter {
@@ -205,9 +211,41 @@ func (m *sectionManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.textInput = ""
 		return m, nil
 	}
+	// 도메인 전용: s = 순서 변경
+	if msg.String() == "s" && len(m.sections) > 1 {
+		entries := make([]sortEntry, len(m.sections))
+		for i, s := range m.sections {
+			entries[i] = sortEntry{id: s.SectionID, label: fmt.Sprintf("%s (%s)", s.Title, s.Currency)}
+		}
+		m.sorting = newSortState(entries, m.sectionList.Index())
+		m.mode = sectionManageModeSort
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.sectionList, cmd = m.sectionList.Update(msg)
 	return m, cmd
+}
+
+// handleSortKey는 섹션 순서 변경 모드 키 처리
+func (m *sectionManageSubModel) handleSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.sorting.handleKey(msg) {
+	case sortKeyCancel:
+		m.mode = sectionManageModeList
+	case sortKeySave:
+		ids := m.sorting.ids()
+		m.mode = sectionManageModeLoading
+		return m, func() tea.Msg {
+			if _, err := m.client.SortSections(ids); err != nil {
+				return sectionManageErrMsg{err: err}
+			}
+			sections, err := m.client.GetSections()
+			if err != nil {
+				return sectionManageErrMsg{err: err}
+			}
+			return sectionManageLoadedMsg{sections: sections}
+		}
+	}
+	return m, nil
 }
 
 func (m *sectionManageSubModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -332,7 +370,7 @@ func (m *sectionManageSubModel) View() string {
 		}
 		b.WriteString(headerStyle.Render("섹션 목록") + "\n\n")
 		b.WriteString(m.sectionList.View() + "\n")
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로") + "\n")
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [s] 순서변경  [Esc] 뒤로") + "\n")
 
 	case sectionManageModeAdd:
 		b.WriteString(headerStyle.Render("섹션 추가") + "\n\n")
@@ -348,6 +386,11 @@ func (m *sectionManageSubModel) View() string {
 			b.WriteString(errorStyle.Render(fmt.Sprintf("'%s' 섹션을 삭제하시겠습니까?", s.Title)) + "\n\n")
 			b.WriteString(helpStyle.Render("[y] 삭제  [n/Esc] 취소") + "\n")
 		}
+
+	case sectionManageModeSort:
+		b.WriteString(headerStyle.Render("섹션 순서 변경") + "\n\n")
+		m.sorting.render(&b)
+		b.WriteString("\n")
 
 	case sectionManageModeError:
 		b.WriteString(errorStyle.Render("[오류] "+m.errMsg) + "\n\n")

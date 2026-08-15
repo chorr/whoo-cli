@@ -50,6 +50,10 @@ func RunEntries(cfg *config.Config, args []string) {
 		runEntriesChanges(cfg, args[1:])
 	case "outside":
 		runEntriesOutside(cfg, args[1:])
+	case "outside_report", "outside-report":
+		runEntriesOutsideReport(cfg, args[1:])
+	case "agg":
+		runEntriesAgg(cfg, args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			runEntriesList(cfg, args)
@@ -192,10 +196,11 @@ func runEntriesBatch(cfg *config.Config, args []string) {
 	printJSON(data)
 }
 
-// runEntriesUpdate는 단건 거래 수정
+// runEntriesUpdate는 단건/복수 거래 수정
+// entry_id를 콤마로 이으면 복수 수정 (최대 100건, PUT entries/:entry_ids/:section_id.json)
 func runEntriesUpdate(cfg *config.Config, args []string) {
 	if len(args) == 0 {
-		PrintError("entry_id가 필요합니다")
+		PrintError("entry_id가 필요합니다 (콤마로 복수 지정 가능)")
 		os.Exit(1)
 	}
 	entryID := args[0]
@@ -235,13 +240,58 @@ func runEntriesUpdate(cfg *config.Config, args []string) {
 		fields["entry_date"] = *date
 	}
 
+	client := NewClient(cfg)
+
+	// 복수 ID (콤마 구분) → 일괄 수정
+	if strings.Contains(entryID, ",") {
+		var ids []int64
+		for _, s := range strings.Split(entryID, ",") {
+			id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+			if err != nil {
+				PrintError("유효하지 않은 entry_id: %s", s)
+				os.Exit(1)
+			}
+			ids = append(ids, id)
+		}
+		changes := api.EntryChanges{
+			LAccount:   *lAccount,
+			LAccountID: *lID,
+			RAccount:   *rAccount,
+			RAccountID: *rID,
+			Item:       *item,
+			Memo:       *memo,
+		}
+		if *money != "" {
+			mv, err := strconv.ParseInt(*money, 10, 64)
+			if err != nil {
+				PrintError("유효하지 않은 금액: %s", *money)
+				os.Exit(1)
+			}
+			changes.Money = mv
+		}
+		if *date != "" {
+			dv, err := strconv.Atoi(*date)
+			if err != nil {
+				PrintError("유효하지 않은 날짜: %s", *date)
+				os.Exit(1)
+			}
+			changes.EntryDate = dv
+		}
+		data, err := client.UpdateEntriesBatch(cfg.SectionID, ids, changes)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSON(data)
+		return
+	}
+
 	entryIDInt, err := strconv.Atoi(entryID)
 	if err != nil {
 		PrintError("유효하지 않은 entry_id: %s", entryID)
 		os.Exit(1)
 	}
 
-	client := NewClient(cfg)
 	entry, err := client.UpdateEntry(cfg.SectionID, entryIDInt, fields)
 	if err != nil {
 		PrintError("%v", err)
@@ -293,7 +343,8 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 	memo := fs.String("memo", "", "메모 필터 (공백=AND, ! prefix=제외)")
 	moneyFrom := fs.Int64("money-from", 0, "최소 금액")
 	moneyTo := fs.Int64("money-to", 0, "최대 금액")
-	sortCol := fs.String("sort", "", "정렬 기준 (entry_date|item|money)")
+	max := fs.String("max", "", "entry_date 커서 (예: 20260203.0034) — 페이지네이션")
+	sortCol := fs.String("sort", "", "정렬 기준 (entry_date|item|money|total|l_account_id|r_account_id)")
 	sortOrder := fs.String("order", "desc", "정렬 방향 (desc|asc)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
@@ -314,6 +365,7 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 		SectionID:  cfg.SectionID,
 		StartDate:  fromInt,
 		EndDate:    toInt,
+		Max:        *max,
 		Limit:      *limit,
 		Account:    *account,
 		AccountID:  *accountID,
@@ -457,6 +509,7 @@ func runEntriesChanges(cfg *config.Config, args []string) {
 func runEntriesOutside(cfg *config.Config, args []string) {
 	fs := flag.NewFlagSet("entries outside", flag.ExitOnError)
 	file := fs.String("file", "", "외부 데이터 텍스트 파일 (필수)")
+	reportSource := fs.String("report-source", "", "인식 실패 시 이 소스명으로 outside_report 자동 보고")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -475,9 +528,91 @@ func runEntriesOutside(cfg *config.Config, args []string) {
 	client := NewClient(cfg)
 	data, err := client.ParseOutside(cfg.SectionID, string(content))
 	if err != nil {
-		// 400이면 outside_report 자동 호출 권장
 		PrintError("%v", err)
-		fmt.Fprintln(os.Stderr, "  지원하지 않는 형식입니다. outside_report API로 보고하면 향후 지원될 수 있습니다.")
+		if *reportSource != "" {
+			// 인식 실패 소스를 서버에 보고 (향후 지원 요청)
+			if _, rerr := client.ReportOutside(*reportSource); rerr != nil {
+				fmt.Fprintf(os.Stderr, "  outside_report 보고 실패: %v\n", rerr)
+			} else {
+				fmt.Fprintf(os.Stderr, "  소스 '%s'를 outside_report로 보고했습니다.\n", *reportSource)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "  지원하지 않는 형식입니다. whoo entries outside_report --source <소스명> 으로 보고하면 향후 지원될 수 있습니다.")
+		}
+		os.Exit(1)
+	}
+	printJSON(data)
+}
+
+// runEntriesOutsideReport는 인식되지 않은 외부 데이터 소스를 보고
+// POST /api/entries/outside_report.json
+func runEntriesOutsideReport(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("entries outside_report", flag.ExitOnError)
+	source := fs.String("source", "", "데이터 소스명 (필수, 예: 은행/카드사 이름)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	if *source == "" {
+		PrintError("--source 는 필수입니다")
+		os.Exit(1)
+	}
+
+	client := NewClient(cfg)
+	data, err := client.ReportOutside(*source)
+	if err != nil {
+		PrintError("%v", err)
+		os.Exit(1)
+	}
+	printJSON(data)
+}
+
+// runEntriesAgg는 계정/항목별 금액 집계 조회
+// --account          → GET entries/account_ids_of_account.json (계정의 항목별 금액)
+// --account-id --by clients → GET entries/clients_of_account_id.json (항목의 거래처별 금액)
+// --account-id --by items   → GET entries/items_of_account_id.json (항목의 아이템별 금액)
+func runEntriesAgg(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("entries agg", flag.ExitOnError)
+	from := fs.String("from", "", "시작 날짜 YYYYMMDD (필수)")
+	to := fs.String("to", "", "종료 날짜 YYYYMMDD (필수)")
+	account := fs.String("account", "", "계정 (항목별 집계)")
+	accountID := fs.String("account-id", "", "항목 ID (거래처/아이템별 집계)")
+	by := fs.String("by", "clients", "집계 기준 clients|items (--account-id 사용 시)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	if *from == "" || *to == "" {
+		PrintError("--from 과 --to 는 필수입니다")
+		os.Exit(1)
+	}
+	if *account == "" && *accountID == "" {
+		PrintError("--account 또는 --account-id 가 필요합니다")
+		os.Exit(1)
+	}
+	fromInt, _ := strconv.Atoi(*from)
+	toInt, _ := strconv.Atoi(*to)
+
+	q := api.FlowQuery{
+		SectionID: cfg.SectionID,
+		StartDate: fromInt,
+		EndDate:   toInt,
+		Account:   *account,
+		AccountID: *accountID,
+	}
+
+	client := NewClient(cfg)
+	var data []byte
+	var err error
+	switch {
+	case *accountID != "" && *by == "items":
+		data, err = client.ItemsOfAccountID(q)
+	case *accountID != "":
+		data, err = client.ClientsOfAccountID(q)
+	default:
+		data, err = client.AccountIDsOfAccount(q)
+	}
+	if err != nil {
+		PrintError("%v", err)
 		os.Exit(1)
 	}
 	printJSON(data)
@@ -520,14 +655,16 @@ func showEntriesHelp() {
 	fmt.Println("  (없음)       거래내역 조회 (기본: 이번 달)")
 	fmt.Println("  add          단건 거래 추가")
 	fmt.Println("  batch        JSON 파일로 일괄 입력")
-	fmt.Println("  update       단건 거래 수정")
+	fmt.Println("  update       단건/복수 거래 수정 (ID 콤마 구분, 최대 100건)")
 	fmt.Println("  delete       단건/복수 삭제")
-	fmt.Println("  search       고급 필터 검색")
+	fmt.Println("  search       고급 필터 검색 (--max 커서 페이지네이션)")
 	fmt.Println("  latest       최근 거래내역")
 	fmt.Println("  suggest      최근 아이템 목록 (Suggest)")
 	fmt.Println("  flow         계정/항목 흐름 분석")
 	fmt.Println("  changes      일일 변동 분석")
+	fmt.Println("  agg          계정/항목/거래처별 금액 집계")
 	fmt.Println("  outside      외부 데이터(SMS 등) 파싱 입력")
+	fmt.Println("  outside_report  인식 실패 소스 보고 (--source)")
 	fmt.Println("  <entry_id>   특정 거래 조회")
 	fmt.Println("  help         도움말")
 	fmt.Println()
@@ -547,8 +684,12 @@ func showEntriesHelp() {
 	fmt.Println("예시:")
 	fmt.Println("  whoo entries add --l-account expenses --l-id x12 --r-account assets --r-id x5 --money 8000 --item 커피")
 	fmt.Println("  whoo entries add --l-account liabilities --l-id x10 --r-account assets --r-id x5 --money 1200000 --item 노트북 --split 3 --fee 2.5")
+	fmt.Println("  whoo entries update 1352827,1352828 --memo 정산완료")
 	fmt.Println("  whoo entries delete 1352827,1352828")
 	fmt.Println("  whoo entries search --item '커피*' --money-from 3000 --money-to 10000")
+	fmt.Println("  whoo entries search --limit 100 --max 20260203.0034 --sort money --order asc")
 	fmt.Println("  whoo entries flow --from 20260101 --to 20260131 --account expenses")
 	fmt.Println("  whoo entries changes --from 20260101 --to 20260131 --account-id x12")
+	fmt.Println("  whoo entries agg --from 20260101 --to 20260131 --account expenses")
+	fmt.Println("  whoo entries agg --from 20260101 --to 20260131 --account-id x12 --by items")
 }

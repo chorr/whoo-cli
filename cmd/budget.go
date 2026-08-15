@@ -37,6 +37,8 @@ func RunBudget(cfg *config.Config, args []string) {
 		runBudgetGet(cfg, args[1:])
 	case "set":
 		runBudgetSet(cfg, args[1:])
+	case "basic_total", "basic-total":
+		runBudgetBasicTotal(cfg, args[1:])
 	case "reset":
 		runBudgetReset(cfg, args[1:])
 	default:
@@ -115,6 +117,64 @@ func runBudgetSet(cfg *config.Config, args []string) {
 	fmt.Println(string(data))
 }
 
+// runBudgetBasicTotal는 장기목표용 월별 총액 일괄 수정
+// PUT /api/budget/:account/basic_total.json
+func runBudgetBasicTotal(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("budget basic_total", flag.ExitOnError)
+	from := fs.Int("from", 0, "시작 월 YYYYMM (필수)")
+	to := fs.Int("to", 0, "종료 월 YYYYMM (필수)")
+	monthlyCSV := fs.String("monthly", "", "1~12월 총액 12개 (쉼표 구분)")
+	all := fs.Int64("all", 0, "모든 월에 동일 총액 적용 (--monthly 대신)")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "[오류] 계정 타입 필요: expenses | income")
+		os.Exit(1)
+	}
+	account := fs.Arg(0)
+	if account != "expenses" && account != "income" {
+		fmt.Fprintln(os.Stderr, "[오류] 계정 타입은 expenses 또는 income")
+		os.Exit(1)
+	}
+	if *from == 0 || *to == 0 {
+		fmt.Fprintln(os.Stderr, "[오류] --from, --to 필수")
+		os.Exit(1)
+	}
+
+	var monthly [12]int64
+	switch {
+	case *monthlyCSV != "":
+		parts := strings.Split(*monthlyCSV, ",")
+		if len(parts) != 12 {
+			fmt.Fprintf(os.Stderr, "[오류] --monthly 는 12개 값이 필요합니다 (현재 %d개)\n", len(parts))
+			os.Exit(1)
+		}
+		for i, p := range parts {
+			v, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[오류] 금액 파싱 오류: %q\n", p)
+				os.Exit(1)
+			}
+			monthly[i] = v
+		}
+	case *all != 0:
+		for i := range monthly {
+			monthly[i] = *all
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "[오류] --monthly 또는 --all 필수")
+		os.Exit(1)
+	}
+
+	client := NewClient(cfg)
+	data, err := client.UpdateBudgetBasicTotal(cfg.SectionID, account, *from, *to, monthly)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
 func runBudgetReset(cfg *config.Config, args []string) {
 	fs := flag.NewFlagSet("budget reset", flag.ExitOnError)
 	from := fs.Int("from", 0, "시작 월 YYYYMM (필수)")
@@ -146,6 +206,7 @@ func showBudgetHelp() {
 서브커맨드:
   get <expenses|income> [--from YYYYMM] [--to YYYYMM]
   set <expenses|income> --ym YYYYMM --account id=금액,id2=금액2
+  basic_total <expenses|income> --from YYYYMM --to YYYYMM (--monthly 1월,...,12월 | --all N)
   reset <expenses|income> --from YYYYMM --to YYYYMM`)
 }
 
@@ -194,8 +255,10 @@ func runBudgetGoalSet(cfg *config.Config, args []string) {
 	baseYM := fs.Int("base-ym", 0, "시작 월 YYYYMM (필수)")
 	goalYM := fs.Int("goal-ym", 0, "목표 월 YYYYMM (필수)")
 	goalMoney := fs.Int64("goal-money", 0, "목표 자본 금액 (필수)")
+	baseMoney := fs.Int64("base-money", 0, "시작 시점 자본 금액")
 	baseIncome := fs.Int64("base-income", 0, "월 기준 수입")
 	baseExpenses := fs.Int64("base-expenses", 0, "월 기준 지출")
+	eachMonths := fs.String("each-months", "", `월별 수입/지출 JSON (예: [[수입12개],[지출12개]])`)
 	splitType := fs.String("split-type", "equal", "배분 방식 (auto|equal|manual)")
 	fs.Parse(args)
 
@@ -204,13 +267,23 @@ func runBudgetGoalSet(cfg *config.Config, args []string) {
 		os.Exit(1)
 	}
 
+	var eachMonthsVal [][]int64
+	if *eachMonths != "" {
+		if err := json.Unmarshal([]byte(*eachMonths), &eachMonthsVal); err != nil {
+			fmt.Fprintf(os.Stderr, "[오류] --each-months JSON 파싱 실패: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	client := NewClient(cfg)
 	data, err := client.UpdateBudgetGoal(cfg.SectionID, api.BudgetGoalParams{
 		BaseYM:       *baseYM,
 		GoalYM:       *goalYM,
 		GoalMoney:    *goalMoney,
+		BaseMoney:    *baseMoney,
 		BaseIncome:   *baseIncome,
 		BaseExpenses: *baseExpenses,
+		EachMonths:   eachMonthsVal,
 		SplitType:    *splitType,
 	})
 	if err != nil {
@@ -244,7 +317,8 @@ func showBudgetGoalHelp() {
 서브커맨드:
   get
   set  --base-ym YYYYMM --goal-ym YYYYMM --goal-money N
-       [--base-income N] [--base-expenses N] [--split-type auto|equal|manual]
+       [--base-money N] [--base-income N] [--base-expenses N]
+       [--each-months '[[수입12개],[지출12개]]'] [--split-type auto|equal|manual]
   reset    # 되돌릴 수 없음, 이중 확인 필요`)
 }
 

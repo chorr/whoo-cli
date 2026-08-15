@@ -24,6 +24,7 @@ const (
 	accountManageModeAdd
 	accountManageModeEdit
 	accountManageModeConfirmDelete
+	accountManageModeSort
 	accountManageModeLoading
 	accountManageModeError
 )
@@ -84,6 +85,9 @@ type accountManageSubModel struct {
 	textInput    string
 	editingID    string
 	existsResult *api.AccountExistsResult
+
+	// 정렬 모드
+	sorting sortState
 }
 
 const (
@@ -229,6 +233,8 @@ func (m *accountManageSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFormKey(msg)
 	case accountManageModeConfirmDelete:
 		return m.handleDeleteKey(msg)
+	case accountManageModeSort:
+		return m.handleSortKey(msg)
 	case accountManageModeError:
 		// enter는 재시도, esc는 메뉴 복귀 (이 화면의 특수 에러 정책)
 		switch msg.String() {
@@ -305,6 +311,16 @@ func (m *accountManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.textInput = ""
 		return m, nil
 	}
+	// 도메인 전용: s = 순서 변경
+	if msg.String() == "s" && len(m.accountData) > 1 {
+		entries := make([]sortEntry, len(m.accountData))
+		for i, d := range m.accountData {
+			entries[i] = sortEntry{id: m.accountIDs[i], label: d.Title}
+		}
+		m.sorting = newSortState(entries, m.accountList.Index())
+		m.mode = accountManageModeSort
+		return m, nil
+	}
 	// 번호 키: 해당 항목으로 커서 이동
 	if idx, _, ok := handleListNumberJump(msg, len(m.accountData), false); ok {
 		m.accountList.Select(idx)
@@ -313,6 +329,32 @@ func (m *accountManageSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	var cmd tea.Cmd
 	m.accountList, cmd = m.accountList.Update(msg)
 	return m, cmd
+}
+
+// handleSortKey는 항목 순서 변경 모드 키 처리
+// 공식 API 규칙: 비활성 항목 포함 전체 항목 ID를 전송해야 한다
+// (accountsMap은 날짜 필터 없이 전체 항목을 담고 있음)
+func (m *accountManageSubModel) handleSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.sorting.handleKey(msg) {
+	case sortKeyCancel:
+		m.mode = accountManageModeList
+	case sortKeySave:
+		ids := m.sorting.ids()
+		account := m.accountType
+		sectionID := m.cfg.SectionID
+		m.mode = accountManageModeLoading
+		return m, func() tea.Msg {
+			if _, err := m.client.SortAccounts(account, sectionID, ids); err != nil {
+				return accountManageErrMsg{err: err}
+			}
+			am, err := m.client.GetAccountsMap(sectionID)
+			if err != nil {
+				return accountManageErrMsg{err: err}
+			}
+			return accountManageLoadedMsg{accountsMap: am}
+		}
+	}
+	return m, nil
 }
 
 func (m *accountManageSubModel) checkExists() tea.Cmd {
@@ -487,11 +529,11 @@ func (m *accountManageSubModel) View() string {
 		} else {
 			b.WriteString(m.accountList.View() + "\n")
 		}
-		help := "[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로"
+		help := "[↑/↓/j/k] 이동  [a] 추가  [e] 수정  [d] 삭제  [s] 순서변경  [Esc] 뒤로"
 		if n := len(m.accountData); n > 0 && n <= 9 {
-			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-%d] 점프  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로", n)
+			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-%d] 점프  [a] 추가  [e] 수정  [d] 삭제  [s] 순서변경  [Esc] 뒤로", n)
 		} else if n := len(m.accountData); n > 9 {
-			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-9/a-%s] 점프  [a] 추가  [e] 수정  [d] 삭제  [Esc] 뒤로", itemShortcutLabel(n-1))
+			help = fmt.Sprintf("[↑/↓/j/k] 이동  [1-9/a-%s] 점프  [a] 추가  [e] 수정  [d] 삭제  [s] 순서변경  [Esc] 뒤로", itemShortcutLabel(n-1))
 		}
 		b.WriteString("\n" + helpStyle.Render(help) + "\n")
 

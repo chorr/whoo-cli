@@ -29,12 +29,27 @@ const (
 type budgetMode int
 
 const (
-	budgetModeLoading      budgetMode = iota
-	budgetModeView                     // 현재 탭 데이터 표시
-	budgetModeTypeSelect               // 탭1: expenses/income 선택 (가로)
-	budgetModeEdit                     // 탭1: 예산 편집 중
-	budgetModeEditConfirm              // 탭1: budgetLong 경고 모달
+	budgetModeLoading           budgetMode = iota
+	budgetModeView                         // 현재 탭 데이터 표시
+	budgetModeTypeSelect                   // 탭1: expenses/income 선택 (가로)
+	budgetModeEdit                         // 탭1: 예산 편집 중
+	budgetModeEditConfirm                  // 탭1: budgetLong 경고 모달
+	budgetModeGoalForm                     // 탭2: 장기목표 설정/수정 폼
+	budgetModeGoalDeleteConfirm            // 탭2: 장기목표 초기화 확인
+	budgetModeCapitalEdit                  // 탭3: 자본 목표 금액 편집
 	budgetModeError
+)
+
+// 장기목표 폼 단계
+const (
+	goalFormStepBaseYM = iota
+	goalFormStepGoalYM
+	goalFormStepGoalMoney
+	goalFormStepBaseMoney
+	goalFormStepBaseIncome
+	goalFormStepBaseExpenses
+	goalFormStepSplitType
+	goalFormStepConfirm
 )
 
 // ─── 서브 모델 ───────────────────────────────────────────────
@@ -62,11 +77,16 @@ type budgetSubModel struct {
 	accountsMap  *api.AccountsMap
 
 	// 탭2: 장기목표
-	goalResp *api.BudgetGoalResponse
+	goalResp     *api.BudgetGoalResponse
+	goalFormStep int
+	goalForm     api.BudgetGoalParams
+	goalInput    string
 
 	// 탭3: 자본 목표
-	capitalGoal api.GoalMap
-	capitalKeys []string // 정렬된 YYYYMM 키
+	capitalGoal   api.GoalMap
+	capitalKeys   []string // 정렬된 YYYYMM 키
+	capitalCursor int
+	capitalInput  string
 }
 
 func newBudgetSubModel(cfg *config.Config, typeIndex int) *budgetSubModel {
@@ -183,6 +203,40 @@ func (m *budgetSubModel) doUpdateBudget(accountID string, amount int64) tea.Cmd 
 	}
 }
 
+func (m *budgetSubModel) doUpdateBudgetGoal() tea.Cmd {
+	sectionID := m.cfg.SectionID
+	p := m.goalForm
+	return func() tea.Msg {
+		_, err := m.client.UpdateBudgetGoal(sectionID, p)
+		if err != nil {
+			return budgetErrMsg{err: err}
+		}
+		return budgetUpdateDoneMsg{feedback: "장기목표가 저장되었습니다"}
+	}
+}
+
+func (m *budgetSubModel) doDeleteBudgetGoal() tea.Cmd {
+	sectionID := m.cfg.SectionID
+	return func() tea.Msg {
+		_, err := m.client.DeleteBudgetGoal(sectionID)
+		if err != nil {
+			return budgetErrMsg{err: err}
+		}
+		return budgetUpdateDoneMsg{feedback: "장기목표가 초기화되었습니다"}
+	}
+}
+
+func (m *budgetSubModel) doUpdateCapitalGoal(ym int, money int64) tea.Cmd {
+	sectionID := m.cfg.SectionID
+	return func() tea.Msg {
+		_, err := m.client.UpdateGoal(sectionID, map[int]int64{ym: money})
+		if err != nil {
+			return budgetErrMsg{err: err}
+		}
+		return budgetUpdateDoneMsg{feedback: "자본 목표가 수정되었습니다"}
+	}
+}
+
 // ─── Update ──────────────────────────────────────────────────
 
 func (m *budgetSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -202,6 +256,9 @@ func (m *budgetSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case budgetCapitalLoadedMsg:
 		m.capitalGoal = msg.goal
 		m.capitalKeys = msg.keys
+		if m.capitalCursor >= len(msg.keys) {
+			m.capitalCursor = 0
+		}
 		m.mode = budgetModeView
 
 	case budgetErrMsg:
@@ -210,7 +267,7 @@ func (m *budgetSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case budgetUpdateDoneMsg:
 		m.mode = budgetModeLoading
-		return m, m.loadBudget()
+		return m, m.currentLoadCmd()
 
 	case tea.KeyMsg:
 		if GlobalAction(msg) == ActionQuit {
@@ -231,6 +288,12 @@ func (m *budgetSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditKey(msg)
 	case budgetModeEditConfirm:
 		return m.handleEditConfirmKey(msg)
+	case budgetModeGoalForm:
+		return m.handleGoalFormKey(msg)
+	case budgetModeGoalDeleteConfirm:
+		return m.handleGoalDeleteKey(msg)
+	case budgetModeCapitalEdit:
+		return m.handleCapitalEditKey(msg)
 	case budgetModeError:
 		switch ErrorAction(msg) {
 		case ActionBack:
@@ -290,23 +353,100 @@ func (m *budgetSubModel) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// 탭별 키 처리
-	if m.tab == budgetTabBudget {
+	switch m.tab {
+	case budgetTabBudget:
 		return m.handleBudgetRowKey(msg)
+	case budgetTabGoal:
+		return m.handleGoalViewKey(msg)
+	case budgetTabCapital:
+		return m.handleCapitalViewKey(msg)
+	}
+	return m, nil
+}
+
+// handleGoalViewKey는 장기목표 탭의 키 처리 (e=설정/수정, d=초기화)
+func (m *budgetSubModel) handleGoalViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch ListAction(msg) {
+	case ActionEdit:
+		m.startGoalForm()
+	case ActionDelete:
+		if m.hasGoalSet() {
+			m.mode = budgetModeGoalDeleteConfirm
+		}
+	}
+	return m, nil
+}
+
+// hasGoalSet은 장기목표 설정 존재 여부
+func (m *budgetSubModel) hasGoalSet() bool {
+	return m.goalResp != nil && m.goalResp.SetID != 0
+}
+
+// startGoalForm은 장기목표 폼을 기존 값(있으면)으로 초기화
+func (m *budgetSubModel) startGoalForm() {
+	now := time.Now()
+	thisYM := int(now.Year())*100 + int(now.Month())
+	m.goalForm = api.BudgetGoalParams{
+		BaseYM:    thisYM,
+		GoalYM:    addMonthsYYYYMM(thisYM, 12),
+		SplitType: "auto",
+	}
+	if m.hasGoalSet() {
+		g := m.goalResp
+		m.goalForm.BaseYM = g.BaseYM
+		m.goalForm.GoalYM = g.GoalYM
+		m.goalForm.GoalMoney = g.GoalMoney
+		m.goalForm.BaseMoney = g.BaseMoney
+		m.goalForm.BaseIncome = g.BaseIncome
+		m.goalForm.BaseExpenses = g.BaseExpenses
+		if g.SplitType != "" {
+			m.goalForm.SplitType = g.SplitType
+		}
+	}
+	m.goalFormStep = goalFormStepBaseYM
+	m.goalInput = fmt.Sprintf("%d", m.goalForm.BaseYM)
+	m.mode = budgetModeGoalForm
+}
+
+// handleCapitalViewKey는 자본 목표 탭의 키 처리 (커서 이동 + e=편집)
+func (m *budgetSubModel) handleCapitalViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if ListAction(msg) == ActionEdit {
+		if len(m.capitalKeys) == 0 {
+			return m, nil
+		}
+		key := m.capitalKeys[m.capitalCursor]
+		m.capitalInput = fmt.Sprintf("%d", m.capitalGoal[key])
+		m.mode = budgetModeCapitalEdit
+		return m, nil
+	}
+	// ListAction은 ↑/↓/j/k를 매핑하지 않으므로 직접 처리
+	switch msg.String() {
+	case "up", "k":
+		if m.capitalCursor > 0 {
+			m.capitalCursor--
+		}
+	case "down", "j":
+		if m.capitalCursor < len(m.capitalKeys)-1 {
+			m.capitalCursor++
+		}
 	}
 	return m, nil
 }
 
 func (m *budgetSubModel) handleBudgetRowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.budgetRows
-	switch ListAction(msg) {
-	case ActionMoveUp:
+	// ListAction은 ↑/↓/j/k를 매핑하지 않으므로 직접 처리
+	switch msg.String() {
+	case "up", "k":
 		if m.rowCursor > 0 {
 			m.rowCursor--
 		}
-	case ActionMoveDown:
+	case "down", "j":
 		if m.rowCursor < len(rows)-1 {
 			m.rowCursor++
 		}
+	}
+	switch ListAction(msg) {
 	case ActionEdit:
 		if len(rows) == 0 {
 			return m, nil
@@ -371,6 +511,153 @@ func (m *budgetSubModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleGoalFormKey는 장기목표 폼 입력 처리
+func (m *budgetSubModel) handleGoalFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.mode = budgetModeView
+		m.goalInput = ""
+		return m, nil
+	case tea.KeyEnter:
+		return m.advanceGoalFormStep()
+	case tea.KeyBackspace, tea.KeyDelete:
+		m.goalInput = backspaceRunes(m.goalInput)
+	case tea.KeyRunes:
+		if m.goalFormStep == goalFormStepSplitType {
+			m.goalInput += string(msg.Runes)
+			return m, nil
+		}
+		for _, r := range msg.Runes {
+			if r >= '0' && r <= '9' {
+				m.goalInput += string(r)
+			}
+		}
+	}
+	return m, nil
+}
+
+// advanceGoalFormStep은 장기목표 폼 단계 진행
+func (m *budgetSubModel) advanceGoalFormStep() (tea.Model, tea.Cmd) {
+	parseInt64 := func(s string) (int64, bool) {
+		var v int64
+		_, err := fmt.Sscanf(s, "%d", &v)
+		return v, err == nil
+	}
+
+	switch m.goalFormStep {
+	case goalFormStepBaseYM:
+		if v, ok := parseInt64(m.goalInput); ok && v >= 200001 && v <= 299912 {
+			m.goalForm.BaseYM = int(v)
+			m.goalFormStep = goalFormStepGoalYM
+			m.goalInput = fmt.Sprintf("%d", m.goalForm.GoalYM)
+		}
+	case goalFormStepGoalYM:
+		if v, ok := parseInt64(m.goalInput); ok && v >= 200001 && v <= 299912 {
+			m.goalForm.GoalYM = int(v)
+			m.goalFormStep = goalFormStepGoalMoney
+			m.goalInput = fmt.Sprintf("%d", m.goalForm.GoalMoney)
+		}
+	case goalFormStepGoalMoney:
+		if v, ok := parseInt64(m.goalInput); ok && v > 0 {
+			m.goalForm.GoalMoney = v
+			m.goalFormStep = goalFormStepBaseMoney
+			m.goalInput = fmt.Sprintf("%d", m.goalForm.BaseMoney)
+		}
+	case goalFormStepBaseMoney:
+		if m.goalInput == "" {
+			m.goalForm.BaseMoney = 0
+		} else if v, ok := parseInt64(m.goalInput); ok {
+			m.goalForm.BaseMoney = v
+		} else {
+			return m, nil
+		}
+		m.goalFormStep = goalFormStepBaseIncome
+		m.goalInput = fmt.Sprintf("%d", m.goalForm.BaseIncome)
+	case goalFormStepBaseIncome:
+		if m.goalInput == "" {
+			m.goalForm.BaseIncome = 0
+		} else if v, ok := parseInt64(m.goalInput); ok {
+			m.goalForm.BaseIncome = v
+		} else {
+			return m, nil
+		}
+		m.goalFormStep = goalFormStepBaseExpenses
+		m.goalInput = fmt.Sprintf("%d", m.goalForm.BaseExpenses)
+	case goalFormStepBaseExpenses:
+		if m.goalInput == "" {
+			m.goalForm.BaseExpenses = 0
+		} else if v, ok := parseInt64(m.goalInput); ok {
+			m.goalForm.BaseExpenses = v
+		} else {
+			return m, nil
+		}
+		m.goalFormStep = goalFormStepSplitType
+		m.goalInput = m.goalForm.SplitType
+	case goalFormStepSplitType:
+		st := strings.TrimSpace(strings.ToLower(m.goalInput))
+		if st == "" {
+			st = "auto"
+		}
+		if st != "auto" && st != "equal" && st != "manual" {
+			return m, nil
+		}
+		m.goalForm.SplitType = st
+		m.goalFormStep = goalFormStepConfirm
+		m.goalInput = ""
+	case goalFormStepConfirm:
+		m.mode = budgetModeLoading
+		return m, m.doUpdateBudgetGoal()
+	}
+	return m, nil
+}
+
+// handleGoalDeleteKey는 장기목표 초기화 확인 처리 (파괴적 — enter로는 진행 불가)
+func (m *budgetSubModel) handleGoalDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch ConfirmAction(msg) {
+	case ActionConfirm:
+		m.mode = budgetModeLoading
+		return m, m.doDeleteBudgetGoal()
+	case ActionBack:
+		m.mode = budgetModeView
+	}
+	return m, nil
+}
+
+// handleCapitalEditKey는 자본 목표 금액 편집 처리
+func (m *budgetSubModel) handleCapitalEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.mode = budgetModeView
+		m.capitalInput = ""
+		return m, nil
+	case tea.KeyEnter:
+		if m.capitalInput == "" || len(m.capitalKeys) == 0 {
+			return m, nil
+		}
+		var amount int64
+		if _, err := fmt.Sscanf(m.capitalInput, "%d", &amount); err != nil || amount < 0 {
+			m.capitalInput = ""
+			return m, nil
+		}
+		var ym int
+		if _, err := fmt.Sscanf(m.capitalKeys[m.capitalCursor], "%d", &ym); err != nil {
+			m.mode = budgetModeView
+			return m, nil
+		}
+		m.mode = budgetModeLoading
+		return m, m.doUpdateCapitalGoal(ym, amount)
+	case tea.KeyBackspace, tea.KeyDelete:
+		m.capitalInput = backspaceRunes(m.capitalInput)
+	case tea.KeyRunes:
+		for _, r := range msg.Runes {
+			if r >= '0' && r <= '9' {
+				m.capitalInput += string(r)
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m *budgetSubModel) currentLoadCmd() tea.Cmd {
 	switch m.tab {
 	case budgetTabBudget:
@@ -401,6 +688,12 @@ func (m *budgetSubModel) View() string {
 		return m.renderEdit()
 	case budgetModeEditConfirm:
 		return m.renderEditConfirm()
+	case budgetModeGoalForm:
+		return m.renderGoalForm()
+	case budgetModeGoalDeleteConfirm:
+		return m.renderGoalDeleteConfirm()
+	case budgetModeCapitalEdit:
+		return m.renderCapitalEdit()
 	}
 	return ""
 }
@@ -507,9 +800,9 @@ func (m *budgetSubModel) writeBudgetView(b *strings.Builder) {
 }
 
 func (m *budgetSubModel) writeBudgetGoalView(b *strings.Builder) {
-	if m.goalResp == nil {
+	if !m.hasGoalSet() {
 		b.WriteString("장기목표가 설정되어 있지 않습니다\n")
-		b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
+		b.WriteString("\n" + helpStyle.Render("[e] 목표 설정  [1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
 		return
 	}
 
@@ -539,7 +832,7 @@ func (m *budgetSubModel) writeBudgetGoalView(b *strings.Builder) {
 		progress = float64(g.BaseMoney) / float64(g.GoalMoney) * 100
 	}
 	b.WriteString(fmt.Sprintf("\n목표 달성률: %s\n", renderPossibilityBar(progress)))
-	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
+	b.WriteString("\n" + helpStyle.Render("[e] 수정  [d] 초기화  [1] 월별 예산  [3] 자본 목표  [r] 새로고침  [Esc] 유형선택"))
 }
 
 func (m *budgetSubModel) writeCapitalGoalView(b *strings.Builder) {
@@ -559,17 +852,22 @@ func (m *budgetSubModel) writeCapitalGoalView(b *strings.Builder) {
 		}
 	}
 
-	for _, k := range m.capitalKeys {
+	for i, k := range m.capitalKeys {
 		v := m.capitalGoal[k]
 		bar := renderMoneyBar(v, maxMoney, 20)
 		ym := k
 		if len(ym) == 6 {
 			ym = ym[:4] + "-" + ym[4:]
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s  %s원\n", ym, bar, FormatMoney(float64(v))))
+		line := fmt.Sprintf("  %s  %s  %s원", ym, bar, FormatMoney(float64(v)))
+		if i == m.capitalCursor {
+			b.WriteString(selectedStyle.Render("> "+line[2:]) + "\n")
+		} else {
+			b.WriteString(line + "\n")
+		}
 	}
 
-	b.WriteString("\n" + helpStyle.Render("[1] 월별 예산  [2] 장기목표  [r] 새로고침  [Esc] 유형선택"))
+	b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [e] 목표 편집  [1] 월별 예산  [2] 장기목표  [r] 새로고침  [Esc] 유형선택"))
 }
 
 func (m *budgetSubModel) renderEdit() string {
@@ -599,6 +897,79 @@ func (m *budgetSubModel) renderEditConfirm() string {
 	b.WriteString("예산을 수정하면 이 월 이후의 모든 자본 목표(goal)가\n자동으로 재계산됩니다.\n\n")
 	b.WriteString("계속 진행하시겠습니까?\n\n")
 	b.WriteString(helpStyle.Render("[y/Enter] 계속  [n/Esc] 취소"))
+	return b.String()
+}
+
+// goalFormLabels는 장기목표 폼 단계별 라벨
+var goalFormLabels = []string{
+	"시작 년월 (YYYYMM)",
+	"목표 년월 (YYYYMM)",
+	"목표 자본 금액",
+	"현재 자본 금액 (선택, 0=미지정)",
+	"연간 수입 예산 (선택, 0=미지정)",
+	"연간 지출 예산 (선택, 0=미지정)",
+	"배분 방식 (auto/equal/manual)",
+}
+
+func (m *budgetSubModel) renderGoalForm() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("예산/목표") + "\n")
+	b.WriteString(m.renderTabBar() + "\n\n")
+	action := "설정"
+	if m.hasGoalSet() {
+		action = "수정"
+	}
+	b.WriteString(headerStyle.Render("장기목표 "+action) + "\n\n")
+
+	// 완료된 단계 요약
+	values := []string{
+		fmt.Sprintf("%d", m.goalForm.BaseYM),
+		fmt.Sprintf("%d", m.goalForm.GoalYM),
+		FormatMoney(float64(m.goalForm.GoalMoney)),
+		FormatMoney(float64(m.goalForm.BaseMoney)),
+		FormatMoney(float64(m.goalForm.BaseIncome)),
+		FormatMoney(float64(m.goalForm.BaseExpenses)),
+		m.goalForm.SplitType,
+	}
+	for i := 0; i < m.goalFormStep && i < len(goalFormLabels); i++ {
+		b.WriteString(fmt.Sprintf("%s: %s\n", goalFormLabels[i], values[i]))
+	}
+
+	if m.goalFormStep < goalFormStepConfirm {
+		b.WriteString(fmt.Sprintf("%s: %s_\n\n", goalFormLabels[m.goalFormStep], m.goalInput))
+		b.WriteString(helpStyle.Render("[Enter] 다음  [Esc] 취소"))
+	} else {
+		b.WriteString("\n" + errorStyle.Render("[주의] 저장 시 목표월 이후의 월별 자본 목표(goal)가 재계산됩니다") + "\n\n")
+		b.WriteString(helpStyle.Render(fmt.Sprintf("[Enter] %s 실행  [Esc] 취소", action)))
+	}
+	return b.String()
+}
+
+func (m *budgetSubModel) renderGoalDeleteConfirm() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("예산/목표") + "\n\n")
+	b.WriteString(errorStyle.Render("[경고] 장기목표를 초기화하시겠습니까?") + "\n\n")
+	b.WriteString("이 섹션의 장기목표 설정과 모든 월별 자본 목표(goal),\n예산(budget) 데이터가 초기화됩니다. 되돌릴 수 없습니다.\n\n")
+	b.WriteString(helpStyle.Render("[y] 초기화  [n/Esc] 취소"))
+	return b.String()
+}
+
+func (m *budgetSubModel) renderCapitalEdit() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("예산/목표") + "\n")
+	b.WriteString(m.renderTabBar() + "\n\n")
+	b.WriteString(headerStyle.Render("자본 목표 편집") + "\n\n")
+
+	if len(m.capitalKeys) > 0 && m.capitalCursor < len(m.capitalKeys) {
+		ym := m.capitalKeys[m.capitalCursor]
+		if len(ym) == 6 {
+			ym = ym[:4] + "-" + ym[4:]
+		}
+		b.WriteString(fmt.Sprintf("대상 월: %s\n\n", ym))
+	}
+	b.WriteString("목표 자본액: " + m.capitalInput + "_\n\n")
+	b.WriteString("(지정한 월 사이의 값은 서버에서 선형 보간으로 채워집니다)\n\n")
+	b.WriteString(helpStyle.Render("[Enter] 저장  [Esc] 취소"))
 	return b.String()
 }
 

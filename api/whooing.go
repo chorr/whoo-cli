@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -549,29 +550,26 @@ func (c *WhooingClient) GetEntries(sectionID, startDate, endDate string, limit i
 	return resp.Rows, nil
 }
 
-// GetBSRaw는 자산부채(Balance Sheet) 조회 (raw JSON, CLI용)
+// GetBSRaw는 자산부채(Balance Sheet) 잔액 조회 (raw JSON, CLI용)
+// 레거시 bs.json 대체: GET /api/report/assets,liabilities.json?rows_type=none
+// start_date=end_date로 요청하면 aggregate가 기준일의 누적 잔액이 된다
 func (c *WhooingClient) GetBSRaw(sectionID, endDate string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("section_id", sectionID)
-	params.Set("end_date", endDate)
-	return c.doRequest(http.MethodGet, "/bs.json_array", params)
+	return c.GetReportByAccount("assets,liabilities", ReportQuery{
+		SectionID: sectionID,
+		StartDate: endDate,
+		EndDate:   endDate,
+		RowsType:  "none",
+	})
 }
 
-// GetBS는 자산부채(Balance Sheet) 조회
-// GET /api/bs.json_array?section_id={id}&end_date={YYYYMMDD}
-// 실제 응답 results: {"assets": {"total": N, "accounts": [...]}, "liabilities": {...}}
+// GetBS는 자산부채(Balance Sheet) 잔액 조회 (TUI용, 구조화 응답)
+// report 응답의 aggregate를 BSResponse로 변환한다
 func (c *WhooingClient) GetBS(sectionID, endDate string) (*BSResponse, error) {
 	data, err := c.GetBSRaw(sectionID, endDate)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp BSResponse
-	if err := parseResponseWithClient(c, data, &resp); err != nil {
-		return nil, err
-	}
-
-	return &resp, nil
+	return c.parseReportAsBS(data)
 }
 
 // CreateEntry는 거래 입력
@@ -633,10 +631,46 @@ func (c *WhooingClient) GetUser() ([]byte, error) {
 	return c.doRequest(http.MethodGet, "/user.json", nil)
 }
 
+// UpdateUser는 유저 정보 수정 (수정할 필드만 전송)
+// PUT /api/user.json
+// fields 키: username, country, language, timezone, currency
+func (c *WhooingClient) UpdateUser(fields map[string]string) ([]byte, error) {
+	params := url.Values{}
+	for k, v := range fields {
+		params.Set(k, v)
+	}
+	return c.doRequest(http.MethodPut, "/user.json", params)
+}
+
 // GetUserLogs는 유저 로그 리스트 조회 (raw JSON 반환)
 // GET /api/user_logs.json
-func (c *WhooingClient) GetUserLogs() ([]byte, error) {
-	return c.doRequest(http.MethodGet, "/user_logs.json", nil)
+// max: id 커서 (id < max 로그만), limit: 표시 갯수 (0이면 생략)
+func (c *WhooingClient) GetUserLogs(max int64, limit int) ([]byte, error) {
+	params := url.Values{}
+	if max > 0 {
+		params.Set("max", strconv.FormatInt(max, 10))
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	return c.doRequest(http.MethodGet, "/user_logs.json", params)
+}
+
+// GetUserPointLogs는 유저 포인트 로그 리스트 조회 (raw JSON 반환)
+// GET /api/user_point_logs.json
+// max: point_id 커서, typ: all|affiliate, limit: 표시 갯수
+func (c *WhooingClient) GetUserPointLogs(max int64, typ string, limit int) ([]byte, error) {
+	params := url.Values{}
+	if max > 0 {
+		params.Set("max", strconv.FormatInt(max, 10))
+	}
+	if typ != "" {
+		params.Set("type", typ)
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	return c.doRequest(http.MethodGet, "/user_point_logs.json", params)
 }
 
 // GetSectionsAll은 전체 섹션 목록 조회 (raw JSON 반환)

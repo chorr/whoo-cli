@@ -101,8 +101,8 @@ type GoalMap map[string]int64
 func (c *WhooingClient) GetBudget(sectionID, account string, startYM, endYM int) (*BudgetResponse, error) {
 	params := url.Values{}
 	params.Set("section_id", sectionID)
-	params.Set("start_ym", strconv.Itoa(startYM))
-	params.Set("end_ym", strconv.Itoa(endYM))
+	params.Set("start_date", strconv.Itoa(startYM))
+	params.Set("end_date", strconv.Itoa(endYM))
 
 	data, err := c.doRequest(http.MethodGet, fmt.Sprintf("/budget/%s.json", account), params)
 	if err != nil {
@@ -135,8 +135,8 @@ func (c *WhooingClient) UpdateBudget(sectionID, account string, targetYM int, ac
 func (c *WhooingClient) UpdateBudgetBasicTotal(sectionID, account string, startYM, endYM int, monthly [12]int64) ([]byte, error) {
 	params := url.Values{}
 	params.Set("section_id", sectionID)
-	params.Set("start_ym", strconv.Itoa(startYM))
-	params.Set("end_ym", strconv.Itoa(endYM))
+	params.Set("start_date", strconv.Itoa(startYM))
+	params.Set("end_date", strconv.Itoa(endYM))
 	for i, v := range monthly {
 		params.Set(strconv.Itoa(i+1), strconv.FormatInt(v, 10))
 	}
@@ -148,8 +148,8 @@ func (c *WhooingClient) UpdateBudgetBasicTotal(sectionID, account string, startY
 func (c *WhooingClient) DeleteBudget(sectionID, account string, startYM, endYM int) ([]byte, error) {
 	params := url.Values{}
 	params.Set("section_id", sectionID)
-	params.Set("start_ym", strconv.Itoa(startYM))
-	params.Set("end_ym", strconv.Itoa(endYM))
+	params.Set("start_date", strconv.Itoa(startYM))
+	params.Set("end_date", strconv.Itoa(endYM))
 	return c.doRequest(http.MethodDelete, fmt.Sprintf("/budget/%s.json", account), params)
 }
 
@@ -217,19 +217,20 @@ func (c *WhooingClient) DeleteBudgetGoal(sectionID string) ([]byte, error) {
 func (c *WhooingClient) GetGoal(sectionID string, startYM, endYM int) (GoalMap, error) {
 	params := url.Values{}
 	params.Set("section_id", sectionID)
-	params.Set("start_ym", strconv.Itoa(startYM))
-	params.Set("end_ym", strconv.Itoa(endYM))
+	params.Set("start_date", strconv.Itoa(startYM))
+	params.Set("end_date", strconv.Itoa(endYM))
 
 	data, err := c.doRequest(http.MethodGet, "/goal.json", params)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp GoalMap
-	if err := parseResponseWithClient(c, data, &resp); err != nil {
+	// 공식 문서는 [{date, money}] 배열, 과거 구현은 {YYYYMM: money} 객체 — 둘 다 수용
+	var raw json.RawMessage
+	if err := parseResponseWithClient(c, data, &raw); err != nil {
 		return nil, err
 	}
-	return resp, nil
+	return flexibleGoalRows(raw)
 }
 
 // UpdateGoal는 월별 자본 목표 수정

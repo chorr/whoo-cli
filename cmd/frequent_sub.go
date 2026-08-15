@@ -25,6 +25,7 @@ const (
 	frequentModeEdit                              // 수정 폼 (list 'e')
 	frequentModeConfirmUse                        // 거래 생성 확인
 	frequentModeConfirmDelete                     // 삭제 확인
+	frequentModeSort                              // 순서 변경
 	frequentModeLoading
 	frequentModeError
 )
@@ -89,6 +90,9 @@ type frequentSubModel struct {
 	formRAccount   string
 	formRAccountID string
 	textInput      string
+
+	// 정렬 모드
+	sorting sortState
 }
 
 func newFrequentSubModel(cfg *config.Config, slotIndex int) *frequentSubModel {
@@ -216,6 +220,8 @@ func (m *frequentSubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmKey(msg)
 	case frequentModeAdd, frequentModeEdit:
 		return m.handleFormKey(msg)
+	case frequentModeSort:
+		return m.handleSortKey(msg)
 	case frequentModeError:
 		switch ErrorAction(msg) {
 		case ActionBack:
@@ -289,6 +295,17 @@ func (m *frequentSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = frequentModeAdd
 		return m, nil
 	}
+	// 도메인 전용: s = 순서 변경
+	if msg.String() == "s" && len(m.items) > 1 {
+		entries := make([]sortEntry, len(m.items))
+		for i, it := range m.items {
+			entries[i] = sortEntry{id: it.ID, label: fmt.Sprintf("%s (%s원)", it.Item, FormatMoney(float64(it.Money)))}
+		}
+		m.feedback = ""
+		m.sorting = newSortState(entries, m.freqList.Index())
+		m.mode = frequentModeSort
+		return m, nil
+	}
 	// 번호 점프
 	if idx, _, ok := handleListNumberJump(msg, len(m.items), false); ok {
 		m.freqList.Select(idx)
@@ -297,6 +314,26 @@ func (m *frequentSubModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.freqList, cmd = m.freqList.Update(msg)
 	return m, cmd
+}
+
+// handleSortKey는 자주입력 순서 변경 모드 키 처리
+func (m *frequentSubModel) handleSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.sorting.handleKey(msg) {
+	case sortKeyCancel:
+		m.mode = frequentModeList
+	case sortKeySave:
+		ids := m.sorting.ids()
+		sectionID := m.cfg.SectionID
+		slot := m.activeSlot
+		m.mode = frequentModeLoading
+		return m, func() tea.Msg {
+			if _, err := m.client.SortFrequentItems(sectionID, slot, ids); err != nil {
+				return frequentActionDoneMsg{err: err}
+			}
+			return frequentActionDoneMsg{feedback: "순서가 저장되었습니다"}
+		}
+	}
+	return m, nil
 }
 
 func (m *frequentSubModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -467,7 +504,7 @@ func (m *frequentSubModel) View() string {
 		} else {
 			b.WriteString(m.freqList.View() + "\n")
 		}
-		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 점프  [Enter] 거래생성  [a] 추가  [e] 수정  [d] 삭제  [Esc] 슬롯선택"))
+		b.WriteString("\n" + helpStyle.Render("[↑/↓/j/k] 이동  [1-9] 점프  [Enter] 거래생성  [a] 추가  [e] 수정  [d] 삭제  [s] 순서변경  [Esc] 슬롯선택"))
 
 	case frequentModeAdd:
 		b.WriteString(headerStyle.Render(fmt.Sprintf("자주입력 추가 [%s]", m.activeSlot)) + "\n\n")
@@ -494,6 +531,10 @@ func (m *frequentSubModel) View() string {
 			b.WriteString(fmt.Sprintf("  '%s' 항목을 삭제합니까?\n", item.Item))
 			b.WriteString("\n" + helpStyle.Render("[y] 삭제  [n/Esc] 취소"))
 		}
+
+	case frequentModeSort:
+		b.WriteString(headerStyle.Render(fmt.Sprintf("자주입력 순서 변경 [%s]", m.activeSlot)) + "\n\n")
+		m.sorting.render(&b)
 
 	case frequentModeError:
 		b.WriteString(errorStyle.Render("[오류] "+m.errMsg) + "\n\n")

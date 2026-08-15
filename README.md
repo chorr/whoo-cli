@@ -31,6 +31,7 @@ whoo user          # 유저 정보
 whoo sections      # 섹션 목록
 whoo accounts      # 항목 메타 (잔액 없음)
 whoo bs            # 자산/부채 잔액
+whoo report        # 통합 보고서 (기간별 손익/잔액)
 whoo inout         # 기간 자금증감
 whoo entries       # 거래내역
 whoo help          # 도움말

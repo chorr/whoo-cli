@@ -82,18 +82,28 @@ api/whooing.go      ← API 메서드 (공통)
 
 | 커맨드 | 상태 | 설명 |
 |--------|------|------|
-| `whoo user` | 완료 | 유저 정보 조회 |
-| `whoo user_logs` | 완료 | 유저 로그 조회 |
-| `whoo sections` | 완료 | 섹션 관리 (서브커맨드) |
-| `whoo accounts` | 완료 | 항목 메타 (잔액 없음) |
-| `whoo bs` | 완료 | 자산/부채 잔액 (raw JSON) |
+| `whoo user` | 완료 | 유저 정보 조회/수정 (`edit`) |
+| `whoo user_logs` | 완료 | 유저 로그 조회 (`--max`/`--limit`) |
+| `whoo user_point_logs` | 완료 | 유저 포인트 로그 조회 (`--max`/`--type`/`--limit`) |
+| `whoo sections` | 완료 | 섹션 관리 (add/edit/delete/sort, `--ui` JSON) |
+| `whoo accounts` | 완료 | 항목 관리 (add/edit/delete/sort, 잔액 없음) |
+| `whoo bs` | 완료 | 자산/부채 잔액 (내부적으로 report API 사용) |
+| `whoo report` | 완료 | 통합 보고서 / `summary` (bs/pl/zigzag 등 대체) |
 | `whoo inout` | 완료 | 자금증감 (raw JSON, 구조체 파싱 없음) |
-| `whoo entries` | 완료 | 거래내역 조회 (서브커맨드 + 플래그) |
+| `whoo entries` | 완료 | 거래내역 (add/batch/update/delete/search/agg/outside 등) |
+| `whoo frequent` | 완료 | 자주입력 (list/get/add/edit/delete/sort/use) |
+| `whoo monthly` | 완료 | 월별입력 (list/get/add/edit/delete/sort/pay) |
+| `whoo budget` | 완료 | 예산 (get/set/basic_total/reset) |
+| `whoo budget-goal` | 완료 | 장기 예산목표 (get/set/reset) |
+| `whoo goal` | 완료 | 자본 목표 (get/set) |
+| `whoo bill` | 완료 | 신용카드 청구 |
+| `whoo checkcard` | 완료 | 체크카드 연동 |
 | `whoo auth` | 완료 | TUI 또는 `--url`/`--pin` 헤드리스 |
 | `whoo status` | 완료 | 인증/설정 상태 확인 |
 | `whoo help` | 완료 | 도움말 표시 |
 
 ## 참고
 
+- 공식 API 문서: `docs/whooing-api-official.md`
 - API 문서: `docs/api-*.md`
 - API 레퍼런스: `docs/api-reference.md`

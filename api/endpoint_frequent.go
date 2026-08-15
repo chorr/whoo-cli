@@ -47,6 +47,14 @@ func (c *WhooingClient) GetFrequentItemsSlot(sectionID, slot string) ([]byte, er
 	return c.doRequest(http.MethodGet, fmt.Sprintf("/frequent_items/%s.json", slot), params)
 }
 
+// GetFrequentItem은 특정 자주입력 항목 단건 조회
+// GET /api/frequent_items/:slot/:item_id.json?section_id=...
+func (c *WhooingClient) GetFrequentItem(sectionID, slot, itemID string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("section_id", sectionID)
+	return c.doRequest(http.MethodGet, fmt.Sprintf("/frequent_items/%s/%s.json", slot, itemID), params)
+}
+
 // CreateFrequentItem은 자주입력 항목 생성
 // POST /api/frequent_items/:slot.json
 func (c *WhooingClient) CreateFrequentItem(sectionID, slot string, p FrequentItemInput) ([]byte, error) {
@@ -111,6 +119,14 @@ func (c *WhooingClient) GetMonthlyItemsSlot(sectionID, slot string) ([]byte, err
 	params := url.Values{}
 	params.Set("section_id", sectionID)
 	return c.doRequest(http.MethodGet, fmt.Sprintf("/monthly_items/%s.json", slot), params)
+}
+
+// GetMonthlyItem은 특정 월별입력 항목 단건 조회
+// GET /api/monthly_items/:slot/:item_id.json?section_id=...
+func (c *WhooingClient) GetMonthlyItem(sectionID, slot, itemID string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("section_id", sectionID)
+	return c.doRequest(http.MethodGet, fmt.Sprintf("/monthly_items/%s/%s.json", slot, itemID), params)
 }
 
 // CreateMonthlyItem은 월별입력 항목 생성

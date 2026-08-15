@@ -31,6 +31,8 @@ func RunFrequent(cfg *config.Config, args []string) {
 	switch args[0] {
 	case "list", "ls":
 		runFrequentList(cfg, args[1:])
+	case "get":
+		runFrequentGet(cfg, args[1:])
 	case "add":
 		runFrequentAdd(cfg, args[1:])
 	case "edit":
@@ -63,6 +65,28 @@ func runFrequentList(cfg *config.Config, args []string) {
 	} else {
 		data, err = client.GetFrequentItemsSlot(cfg.SectionID, *slot)
 	}
+	if err != nil {
+		PrintError("%v", err)
+		os.Exit(1)
+	}
+	printJSON(data)
+}
+
+// runFrequentGet은 자주입력 항목 단건 조회
+func runFrequentGet(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("frequent get", flag.ExitOnError)
+	slot := fs.String("slot", "slot1", "슬롯 (slot1/slot2/slot3)")
+	if err := fs.Parse(args); err != nil {
+		return
+	}
+
+	if fs.NArg() < 1 {
+		PrintError("item_id 필요: frequent get [--slot slot1] <item_id>")
+		os.Exit(1)
+	}
+
+	client := NewClient(cfg)
+	data, err := client.GetFrequentItem(cfg.SectionID, *slot, fs.Arg(0))
 	if err != nil {
 		PrintError("%v", err)
 		os.Exit(1)
@@ -281,6 +305,7 @@ func showFrequentHelp() {
 
 서브커맨드:
   list   [--slot slot1]                          자주입력 목록 조회
+  get    [--slot slot1] <item_id>                자주입력 항목 단건 조회
   add    --slot slot1 --item <명> --l-account <타입> --l-id <id>
          --r-account <타입> --r-id <id> [--money <금액>]
                                                   자주입력 항목 추가

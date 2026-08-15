@@ -31,6 +31,8 @@ func RunMonthly(cfg *config.Config, args []string) {
 	switch args[0] {
 	case "list", "ls":
 		runMonthlyList(cfg, args[1:])
+	case "get":
+		runMonthlyGet(cfg, args[1:])
 	case "add":
 		runMonthlyAdd(cfg, args[1:])
 	case "edit":
@@ -63,6 +65,28 @@ func runMonthlyList(cfg *config.Config, args []string) {
 	} else {
 		data, err = client.GetMonthlyItemsSlot(cfg.SectionID, *slot)
 	}
+	if err != nil {
+		PrintError("%v", err)
+		os.Exit(1)
+	}
+	printJSON(data)
+}
+
+// runMonthlyGet은 월별입력 항목 단건 조회
+func runMonthlyGet(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("monthly get", flag.ExitOnError)
+	slot := fs.String("slot", "slot1", "슬롯 (slot1/slot2/slot3)")
+	if err := fs.Parse(args); err != nil {
+		return
+	}
+
+	if fs.NArg() < 1 {
+		PrintError("item_id 필요: monthly get [--slot slot1] <item_id>")
+		os.Exit(1)
+	}
+
+	client := NewClient(cfg)
+	data, err := client.GetMonthlyItem(cfg.SectionID, *slot, fs.Arg(0))
 	if err != nil {
 		PrintError("%v", err)
 		os.Exit(1)
@@ -293,6 +317,7 @@ func showMonthlyHelp() {
 
 서브커맨드:
   list   [--slot slot1]                          월별입력 목록 조회
+  get    [--slot slot1] <item_id>                월별입력 항목 단건 조회
   add    --slot slot1 --item <명> --l-account <타입> --l-id <id>
          --r-account <타입> --r-id <id> --pay-date <1~31>
          [--money <금액>] [--skip-holiday before|after|none]
