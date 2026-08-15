@@ -1,0 +1,11 @@
+# gitleaks 설정 — 기본 룰을 확장하고 오탐 경로만 허용
+# docs/whooing-api-official.md는 공식 API 문서로, 예시 토큰/키 플레이스홀더가 포함되어 있다 (실제 시크릿 아님)
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "공식 API 문서의 예시 자격 증명 (a3f9b2c1... 등 플레이스홀더)"
+paths = [
+    '''docs/whooing-api-official\.md''',
+]
