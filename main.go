@@ -39,6 +39,8 @@ func main() {
 		cmd.RunUser(cfg, args)
 	case "user_logs":
 		cmd.RunUserLogs(cfg, args)
+	case "user_point_logs":
+		cmd.RunUserPointLogs(cfg, args)
 	case "sections", "s":
 		cmd.RunSections(cfg, args)
 	case "accounts", "a":
@@ -53,6 +55,8 @@ func main() {
 		cmd.RunInOut(cfg, args)
 	case "bs":
 		cmd.RunBS(cfg, args)
+	case "report", "r":
+		cmd.RunReport(cfg, args)
 	case "budget":
 		cmd.RunBudget(cfg, args)
 	case "budget-goal":

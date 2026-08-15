@@ -146,6 +146,7 @@ func runSectionsEdit(cfg *config.Config, args []string) {
 	skinID := fs.Int("skin-id", -1, "스킨 번호")
 	decimalPlaces := fs.Int("decimal-places", -1, "소수점 자릿수")
 	dateFormat := fs.String("date-format", "", "날짜 표시 방식")
+	uiJSON := fs.String("ui", "", `UI 설정 JSON 객체 (예: '{"budgetLong":"y","memoOpen":"n"}')`)
 	var uiKeys multiFlag
 	fs.Var(&uiKeys, "ui-key", "UI 설정 (key=value 형식, 여러 번 사용 가능)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -192,8 +193,18 @@ func runSectionsEdit(cfg *config.Config, args []string) {
 		}
 	}
 
-	// UI 설정 파싱: "key=value" 형식
+	// UI 설정 파싱: --ui JSON 객체 → --ui-key key=value 순으로 병합
 	uiSettings := make(map[string]string)
+	if *uiJSON != "" {
+		var m map[string]interface{}
+		if err := parseJSONResponse([]byte(*uiJSON), &m); err != nil {
+			PrintError("--ui JSON 파싱 실패: %v", err)
+			os.Exit(1)
+		}
+		for k, v := range m {
+			uiSettings[k] = fmt.Sprintf("%v", v)
+		}
+	}
 	for _, kv := range uiKeys {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) != 2 {
@@ -282,7 +293,8 @@ func showSectionsHelp() {
 	fmt.Println()
 	fmt.Println("sections edit 옵션:")
 	fmt.Println("  --title / --currency / --memo / --skin-id / --decimal-places / --date-format")
-	fmt.Println("  --ui-key key=value  UI 설정 (여러 번 사용 가능)")
+	fmt.Println("  --ui '<JSON>'       UI 설정 JSON 객체 (예: '{\"budgetLong\":\"y\"}')")
+	fmt.Println("  --ui-key key=value  UI 설정 (여러 번 사용 가능, --ui보다 우선)")
 	fmt.Println()
 	fmt.Println("예시:")
 	fmt.Println("  whoo sections add --title \"주머니\" --currency KRW")

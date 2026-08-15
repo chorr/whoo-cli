@@ -50,16 +50,20 @@ whoo auth         → 인증 (TTY면 TUI, 없으면 URL 출력)
 whoo auth --url   → 인증 URL stdout 출력 (헤드리스)
 whoo auth --pin   → PIN으로 토큰 교환 (WHOOING_PIN 도 가능)
 whoo status       → 인증/설정 상태 확인 (CLI)
-whoo user         → 유저 정보 JSON 출력
+whoo user         → 유저 정보 JSON 출력 / user edit 수정
 whoo user_logs    → 유저 로그 JSON 출력
+whoo user_point_logs → 유저 포인트 로그 JSON 출력
 whoo sections, s  → 섹션 관리 (CLI)
 whoo accounts, a  → 항목 메타 (잔액 없음)
-whoo bs           → 자산/부채 잔액 JSON
+whoo bs           → 자산/부채 잔액 JSON (report API 기반)
+whoo report, r    → 통합 보고서 / report summary (CLI)
 whoo inout, io    → 기간 자금증감 JSON
 whoo entries, e   → 거래내역 조회 (CLI)
 whoo frequent, f  → 자주 쓰는 거래 (CLI)
 whoo monthly, m   → 월별 요약 (CLI)
 whoo budget       → 예산 (CLI)
+whoo budget-goal  → 장기 예산목표 (CLI)
+whoo goal         → 자본 목표 (CLI)
 whoo bill, b      → 청구서 (CLI)
 whoo checkcard, cc → 카드 확인 (CLI)
 whoo help         → 도움말
