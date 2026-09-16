@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,19 @@ import (
 	"whoo-cli/api"
 	"whoo-cli/config"
 )
+
+type flatEntry struct {
+	SectionID  string             `json:"section_id"`
+	EntryID    int                `json:"entry_id"`
+	EntryDate  api.FlexibleString `json:"entry_date"`
+	LAccount   string             `json:"l_account"`
+	LAccountID string             `json:"l_account_id"`
+	RAccount   string             `json:"r_account"`
+	RAccountID string             `json:"r_account_id"`
+	Money      float64            `json:"money"`
+	Item       string             `json:"item"`
+	Memo       string             `json:"memo"`
+}
 
 // RunEntries는 entries CLI 커맨드 실행
 func RunEntries(cfg *config.Config, args []string) {
@@ -69,6 +83,7 @@ func runEntriesList(cfg *config.Config, args []string) {
 	from := fs.String("from", "", "시작 날짜 (YYYYMMDD)")
 	to := fs.String("to", "", "종료 날짜 (YYYYMMDD)")
 	limit := fs.Int("limit", 0, "조회 수 제한")
+	flat := fs.Bool("flat", false, "compact 배열로 출력")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -86,6 +101,15 @@ func runEntriesList(cfg *config.Config, args []string) {
 	if err != nil {
 		PrintError("%v", err)
 		os.Exit(1)
+	}
+	if *flat {
+		rows, err := parseFlatEntries(data, cfg.SectionID)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSONValue(rows)
+		return
 	}
 	printJSON(data)
 }
@@ -157,8 +181,7 @@ func runEntriesAdd(cfg *config.Config, args []string) {
 		PrintError("%v", err)
 		os.Exit(1)
 	}
-	out, _ := marshalPretty(data)
-	fmt.Println(string(out))
+	printJSONValue(data)
 }
 
 // runEntriesBatch는 JSON 파일에서 일괄 입력
@@ -297,8 +320,7 @@ func runEntriesUpdate(cfg *config.Config, args []string) {
 		PrintError("%v", err)
 		os.Exit(1)
 	}
-	out, _ := marshalPretty(entry)
-	fmt.Println(string(out))
+	printJSONValue(entry)
 }
 
 // runEntriesDelete는 단건 또는 복수 삭제
@@ -346,6 +368,7 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 	max := fs.String("max", "", "entry_date 커서 (예: 20260203.0034) — 페이지네이션")
 	sortCol := fs.String("sort", "", "정렬 기준 (entry_date|item|money|total|l_account_id|r_account_id)")
 	sortOrder := fs.String("order", "desc", "정렬 방향 (desc|asc)")
+	flat := fs.Bool("flat", false, "rows만 compact 배열로 출력")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -361,7 +384,7 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 	toInt, _ := strconv.Atoi(*to)
 
 	client := NewClient(cfg)
-	data, err := client.SearchEntries(api.EntrySearch{
+	search := api.EntrySearch{
 		SectionID:  cfg.SectionID,
 		StartDate:  fromInt,
 		EndDate:    toInt,
@@ -379,10 +402,24 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 		MoneyTo:    *moneyTo,
 		SortColumn: *sortCol,
 		SortOrder:  *sortOrder,
-	})
+	}
+	if err := resolveEntryAccountFilters(client, &search); err != nil {
+		PrintError("%v", err)
+		os.Exit(1)
+	}
+	data, err := client.SearchEntries(search)
 	if err != nil {
 		PrintError("%v", err)
 		os.Exit(1)
+	}
+	if *flat {
+		rows, err := parseFlatEntries(data, cfg.SectionID)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSONValue(rows)
+		return
 	}
 	printJSON(data)
 }
@@ -391,6 +428,7 @@ func runEntriesSearch(cfg *config.Config, args []string) {
 func runEntriesLatest(cfg *config.Config, args []string) {
 	fs := flag.NewFlagSet("entries latest", flag.ContinueOnError)
 	limit := fs.Int("limit", 0, "조회 수 제한")
+	flat := fs.Bool("flat", false, "compact 배열로 출력")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -400,7 +438,110 @@ func runEntriesLatest(cfg *config.Config, args []string) {
 		PrintError("%v", err)
 		os.Exit(1)
 	}
+	if *flat {
+		rows, err := parseFlatEntries(data, cfg.SectionID)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSONValue(rows)
+		return
+	}
 	printJSON(data)
+}
+
+func resolveEntryAccountFilters(client *api.WhooingClient, search *api.EntrySearch) error {
+	needsAccounts := (search.AccountID != "" && search.Account == "") ||
+		(search.LAccountID != "" && search.LAccount == "") ||
+		(search.RAccountID != "" && search.RAccount == "")
+	if !needsAccounts {
+		return nil
+	}
+
+	accounts, err := client.GetAccountsMap(search.SectionID)
+	if err != nil {
+		return fmt.Errorf("항목 타입 확인 실패: %w", err)
+	}
+	resolve := func(accountID, currentType string) (string, error) {
+		if accountID == "" || currentType != "" {
+			return currentType, nil
+		}
+		accountType, ok := findAccountType(accounts, accountID)
+		if !ok {
+			return "", fmt.Errorf("account_id %s를 현재 섹션에서 찾을 수 없습니다", accountID)
+		}
+		return accountType, nil
+	}
+
+	if search.Account, err = resolve(search.AccountID, search.Account); err != nil {
+		return err
+	}
+	if search.LAccount, err = resolve(search.LAccountID, search.LAccount); err != nil {
+		return err
+	}
+	if search.RAccount, err = resolve(search.RAccountID, search.RAccount); err != nil {
+		return err
+	}
+	return nil
+}
+
+func findAccountType(accounts *api.AccountsMap, accountID string) (string, bool) {
+	for _, accountType := range AccountTypes {
+		if _, ok := accounts.GetAccountsByType(accountType.Code)[accountID]; ok {
+			return accountType.Code, true
+		}
+	}
+	return "", false
+}
+
+func parseFlatEntries(data []byte, sectionID string) ([]flatEntry, error) {
+	var envelope struct {
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Results json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("거래 응답 파싱 실패: %w", err)
+	}
+	if envelope.Code != 200 && envelope.Code != 204 {
+		return nil, &api.APIError{Code: envelope.Code, Message: envelope.Message}
+	}
+
+	var entries []api.Entry
+	results := strings.TrimSpace(string(envelope.Results))
+	switch {
+	case results == "" || results == "null":
+		return []flatEntry{}, nil
+	case strings.HasPrefix(results, "["):
+		if err := json.Unmarshal(envelope.Results, &entries); err != nil {
+			return nil, fmt.Errorf("거래 배열 파싱 실패: %w", err)
+		}
+	default:
+		var rows struct {
+			Rows []api.Entry `json:"rows"`
+		}
+		if err := json.Unmarshal(envelope.Results, &rows); err != nil {
+			return nil, fmt.Errorf("거래 rows 파싱 실패: %w", err)
+		}
+		entries = rows.Rows
+	}
+
+	flat := make([]flatEntry, 0, len(entries))
+	for _, entry := range entries {
+		flat = append(flat, flatEntry{
+			SectionID:  sectionID,
+			EntryID:    entry.EntryID,
+			EntryDate:  entry.EntryDate,
+			LAccount:   entry.LAccount,
+			LAccountID: entry.LAccountID,
+			RAccount:   entry.RAccount,
+			RAccountID: entry.RAccountID,
+			Money:      entry.Money,
+			Item:       entry.Item,
+			Memo:       entry.Memo,
+		})
+	}
+	return flat, nil
 }
 
 // runEntriesLatestItems는 최근 아이템 목록 (Suggest)
@@ -622,12 +763,72 @@ func runEntriesAgg(cfg *config.Config, args []string) {
 func showEntriesHelpFor(args []string) {
 	if len(args) > 0 && !isHelpArg(args[0]) {
 		switch args[0] {
+		case "add":
+			showEntriesAddHelp()
+			return
+		case "search":
+			showEntriesSearchHelp()
+			return
 		case "flow":
 			showEntriesFlowHelp()
 			return
 		}
 	}
 	showEntriesHelp()
+}
+
+func showEntriesAddHelp() {
+	fmt.Println("사용법: whoo entries add [플래그]")
+	fmt.Println()
+	fmt.Println("단건 거래를 입력합니다. --split/--repeat는 후잉 item 명령어로 전송됩니다.")
+	fmt.Println()
+	fmt.Println("플래그:")
+	fmt.Println("  --l-account, --l-id   왼쪽 계정과 항목 ID (필수)")
+	fmt.Println("  --r-account, --r-id   오른쪽 계정과 항목 ID (필수)")
+	fmt.Println("  --money               총액 (필수)")
+	fmt.Println("  --item, --memo        아이템과 메모")
+	fmt.Println("  --date                날짜 YYYYMMDD (기본: 오늘)")
+	fmt.Println("  --split N             총액을 N개월로 분할 (item에 //N)")
+	fmt.Println("  --fee F               할부 수수료율 %")
+	fmt.Println("  --repeat N            같은 금액을 N개월 반복 (item에 **N)")
+	fmt.Println("  --section             섹션 ID (전역 플래그)")
+	fmt.Println()
+	fmt.Println("할부 금액 분배:")
+	fmt.Println("  후잉 서버가 카드 항목의 '할부입력시 처리방식' 단위(1원 또는 100원)에")
+	fmt.Println("  맞춰 이후 회차를 절삭하고 나머지를 첫 회차에 더합니다.")
+	fmt.Println("  예: 2,290,000원 / 12개월, 100원 단위 → 첫 회 191,200원 + 이후 190,800원×11")
+	fmt.Println()
+	fmt.Println("예시:")
+	fmt.Println("  whoo entries add --l-account expenses --l-id x12 --r-account liabilities --r-id x10 --money 2290000 --item 아이폰 --split 12")
+}
+
+func showEntriesSearchHelp() {
+	fmt.Println("사용법: whoo entries search [플래그]")
+	fmt.Println()
+	fmt.Println("기간과 항목 조건으로 거래를 검색합니다. ID만 지정하면 계정 타입을 자동 확인합니다.")
+	fmt.Println()
+	fmt.Println("플래그:")
+	fmt.Println("  --from, --to       날짜 범위 YYYYMMDD (기본: 이번 달)")
+	fmt.Println("  --limit            최대 조회 수 (기본 20, 최대 100)")
+	fmt.Println("  --account          좌우 공통 계정 타입")
+	fmt.Println("  --account-id       좌우 어느 쪽이든 일치하는 항목 ID")
+	fmt.Println("  --l-account        왼쪽 계정 타입")
+	fmt.Println("  --l-id             왼쪽 항목 ID")
+	fmt.Println("  --r-account        오른쪽 계정 타입")
+	fmt.Println("  --r-id             오른쪽 항목 ID")
+	fmt.Println("  --item, --memo     아이템/메모 필터")
+	fmt.Println("  --money-from       최소 금액")
+	fmt.Println("  --money-to         최대 금액")
+	fmt.Println("  --max              entry_date 페이지 커서")
+	fmt.Println("  --sort             entry_date|item|money|total|l_account_id|r_account_id")
+	fmt.Println("  --order            desc|asc")
+	fmt.Println("  --flat             rows만 compact 배열로 출력")
+	fmt.Println("  --section          섹션 ID (전역 플래그)")
+	fmt.Println()
+	fmt.Println("예시:")
+	fmt.Println("  whoo entries search --account-id x2 --from 20260301 --to 20260916 --flat")
+	fmt.Println("  whoo entries search --l-id x2 --item '이체*'")
+	fmt.Println("  whoo entries search --r-account assets --r-id x2")
 }
 
 func showEntriesFlowHelp() {
@@ -680,6 +881,8 @@ func showEntriesHelp() {
 	fmt.Println("  --split N     할부 N개월 (item에 //N 추가)")
 	fmt.Println("  --fee F       할부 수수료율 %")
 	fmt.Println("  --repeat N    반복 N회 (item에 **N 추가)")
+	fmt.Println("  분할 금액은 항목 설정 단위로 절삭되며 나머지는 첫 회차에 합산됩니다.")
+	fmt.Println("  상세: whoo entries add --help")
 	fmt.Println()
 	fmt.Println("예시:")
 	fmt.Println("  whoo entries add --l-account expenses --l-id x12 --r-account assets --r-id x5 --money 8000 --item 커피")
@@ -687,6 +890,7 @@ func showEntriesHelp() {
 	fmt.Println("  whoo entries update 1352827,1352828 --memo 정산완료")
 	fmt.Println("  whoo entries delete 1352827,1352828")
 	fmt.Println("  whoo entries search --item '커피*' --money-from 3000 --money-to 10000")
+	fmt.Println("  whoo entries search --account-id x2 --from 20260301 --to 20260916 --flat")
 	fmt.Println("  whoo entries search --limit 100 --max 20260203.0034 --sort money --order asc")
 	fmt.Println("  whoo entries flow --from 20260101 --to 20260131 --account expenses")
 	fmt.Println("  whoo entries changes --from 20260101 --to 20260131 --account-id x12")

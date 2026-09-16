@@ -1751,6 +1751,12 @@ AI Agent나 MCP(Model Context Protocol) 도구에서 API를 사용할 때는 아
 > | `zigzag_mountain.json` — 월별 자산/부채 항목변동 | `report/assets,liabilities/:account_id.json?rows_type=month`                    |
 > | `mountain.json` — 총자산 변동 추이               | `report/assets,liabilities.json?rows_type=month` (목표는 `goal.json` 별도 조회) |
 
+> **whoo-cli 호환성 메모 (2026-09-16):**
+> 공식 대체 경로인 `/report/assets,liabilities.json`은 현재 콤마가 포함된
+> 경로에서 HTTP 403을 반환한다. 단일 계정 report 경로는 정상 응답하므로,
+> CLI는 deprecated된 `bs.json` 대신 자산·부채 report를 각각 조회한 결과를
+> 병합한다.
+
 #### GET report.json
 
 통합 보고서 조회 API입니다. 항상 `{total, accounts}` 구조를 반환합니다. 기간별로 다양한 계정 타입(자산, 부채, 수익, 비용)의 데이터를 조회할 수 있으며, 일별, 월별, 분기별, 연도별 등 다양한 단위로 데이터를 그룹화하여 반환합니다.

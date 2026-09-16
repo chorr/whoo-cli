@@ -132,6 +132,7 @@ type Config struct {
 	Token       string `json:"token"`
 	TokenSecret string `json:"token_secret"`
 	SectionID   string `json:"section_id"`
+	Verbose     bool   `json:"-"`
 
 	// PendingRequestToken은 headless OAuth의 request token (PIN 교환 전)
 	PendingRequestToken string `json:"pending_request_token,omitempty"`

@@ -32,17 +32,6 @@ type ReportGroup struct {
 	Accounts map[string]float64 `json:"accounts"`
 }
 
-// reportAggregate는 report 응답 aggregate 중 BS 계정 부분
-type reportAggregate struct {
-	Assets      ReportGroup `json:"assets"`
-	Liabilities ReportGroup `json:"liabilities"`
-}
-
-// reportResults는 report 응답의 results 구조 (BS 변환용 최소 필드)
-type reportResults struct {
-	Aggregate reportAggregate `json:"aggregate"`
-}
-
 func reportQueryToValues(q ReportQuery) url.Values {
 	p := url.Values{}
 	p.Set("section_id", q.SectionID)
@@ -76,7 +65,160 @@ func (c *WhooingClient) GetReport(q ReportQuery) ([]byte, error) {
 // GET /api/report/:account.json
 // account: assets|liabilities|expenses|income|all (콤마로 복수 지정 가능)
 func (c *WhooingClient) GetReportByAccount(account string, q ReportQuery) ([]byte, error) {
+	accounts := strings.Split(account, ",")
+	if len(accounts) > 1 {
+		responses := make([][]byte, 0, len(accounts))
+		for _, accountType := range accounts {
+			accountType = strings.TrimSpace(accountType)
+			if accountType == "" {
+				continue
+			}
+			data, err := c.doRequest(
+				http.MethodGet,
+				fmt.Sprintf("/report/%s.json", accountType),
+				reportQueryToValues(q),
+			)
+			if err != nil {
+				return nil, err
+			}
+			responses = append(responses, data)
+		}
+		return c.mergeReportResponses(responses)
+	}
 	return c.doRequest(http.MethodGet, fmt.Sprintf("/report/%s.json", account), reportQueryToValues(q))
+}
+
+// mergeReportResponses는 WAF에서 콤마 경로를 거부하는 환경을 피하기 위해
+// 계정별로 조회한 report 응답을 기존 다중 계정 응답 형태로 합친다.
+func (c *WhooingClient) mergeReportResponses(responses [][]byte) ([]byte, error) {
+	var root map[string]interface{}
+	mergedResults := map[string]interface{}{}
+
+	for i, data := range responses {
+		var results map[string]interface{}
+		if err := parseResponseWithClient(c, data, &results); err != nil {
+			return nil, err
+		}
+		deepMergeJSON(mergedResults, results)
+
+		if i == 0 {
+			if err := json.Unmarshal(data, &root); err != nil {
+				return nil, fmt.Errorf("report 응답 파싱 실패: %w", err)
+			}
+		}
+	}
+
+	if root == nil {
+		return nil, fmt.Errorf("합칠 report 응답이 없습니다")
+	}
+	addDerivedReportValues(mergedResults)
+	root["results"] = mergedResults
+	root["rest_of_api"] = c.LastRestOfAPI()
+	return json.Marshal(root)
+}
+
+func deepMergeJSON(dst, src map[string]interface{}) {
+	for key, srcValue := range src {
+		srcMap, srcOK := srcValue.(map[string]interface{})
+		dstMap, dstOK := dst[key].(map[string]interface{})
+		if srcOK && dstOK {
+			deepMergeJSON(dstMap, srcMap)
+			continue
+		}
+		dst[key] = srcValue
+	}
+}
+
+// addDerivedReportValues는 분리 조회 시 서버가 계산하지 못하는 자본/순이익을 보완한다.
+func addDerivedReportValues(node map[string]interface{}) {
+	for _, value := range node {
+		if child, ok := value.(map[string]interface{}); ok {
+			addDerivedReportValues(child)
+		}
+	}
+
+	if _, exists := node["capital"]; !exists {
+		if assets, aok := reportTotal(node["assets"]); aok {
+			if liabilities, lok := reportTotal(node["liabilities"]); lok {
+				node["capital"] = map[string]interface{}{"total": assets - liabilities}
+			}
+		}
+	}
+	if _, exists := node["net_income"]; !exists {
+		if income, iok := reportTotal(node["income"]); iok {
+			if expenses, eok := reportTotal(node["expenses"]); eok {
+				node["net_income"] = income - expenses
+			}
+		}
+	}
+}
+
+func reportTotal(value interface{}) (float64, bool) {
+	group, ok := value.(map[string]interface{})
+	if !ok {
+		return 0, false
+	}
+	total, ok := group["total"].(float64)
+	return total, ok
+}
+
+type reportBalanceResults struct {
+	Assets      *ReportGroup `json:"assets"`
+	Liabilities *ReportGroup `json:"liabilities"`
+	Aggregate   struct {
+		Assets      *ReportGroup `json:"assets"`
+		Liabilities *ReportGroup `json:"liabilities"`
+	} `json:"aggregate"`
+}
+
+// parseReportAsBS는 rows_type=none의 직접 그룹과 aggregate 그룹을 모두 수용한다.
+func (c *WhooingClient) parseReportAsBS(data []byte) (*BSResponse, error) {
+	var results reportBalanceResults
+	if err := parseResponseWithClient(c, data, &results); err != nil {
+		return nil, err
+	}
+	assets := results.Assets
+	liabilities := results.Liabilities
+	if assets == nil {
+		assets = results.Aggregate.Assets
+	}
+	if liabilities == nil {
+		liabilities = results.Aggregate.Liabilities
+	}
+	if assets == nil || liabilities == nil {
+		return nil, fmt.Errorf("report 응답에 자산/부채 잔액이 없습니다")
+	}
+	return &BSResponse{
+		Assets:      reportGroupToBSGroup(*assets),
+		Liabilities: reportGroupToBSGroup(*liabilities),
+	}, nil
+}
+
+func reportGroupToBSGroup(group ReportGroup) BSGroup {
+	accounts := make([]BSAccount, 0, len(group.Accounts))
+	for accountID, money := range group.Accounts {
+		accounts = append(accounts, BSAccount{AccountID: accountID, Money: money})
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		return reportAccountIDLess(accounts[i].AccountID, accounts[j].AccountID)
+	})
+	return BSGroup{Total: group.Total, Accounts: accounts}
+}
+
+func reportAccountIDLess(a, b string) bool {
+	number := func(accountID string) (int, bool) {
+		digits := strings.TrimLeftFunc(accountID, func(r rune) bool {
+			return r < '0' || r > '9'
+		})
+		value, err := strconv.Atoi(digits)
+		return value, digits != "" && err == nil
+	}
+	aNumber, aOK := number(a)
+	bNumber, bOK := number(b)
+	if aOK && bOK && aNumber != bNumber {
+		return aNumber < bNumber
+	}
+	return a < b
 }
 
 // GetReportSummary는 기간별 손익/자산 요약 조회 (raw JSON, flat 숫자 응답)
@@ -88,61 +230,6 @@ func (c *WhooingClient) GetReportSummary(account string, q ReportQuery) ([]byte,
 		endpoint = fmt.Sprintf("/report_summary/%s.json", account)
 	}
 	return c.doRequest(http.MethodGet, endpoint, reportQueryToValues(q))
-}
-
-// ─── BS 변환 헬퍼 ────────────────────────────────────────────
-
-// reportGroupToBSGroup은 report의 {total, accounts map}을 BSGroup으로 변환
-// 항목 순서는 account_id 자연 정렬 (x1, x2, ..., x10)
-func reportGroupToBSGroup(g ReportGroup) BSGroup {
-	accounts := make([]BSAccount, 0, len(g.Accounts))
-	for id, money := range g.Accounts {
-		accounts = append(accounts, BSAccount{AccountID: id, Money: money})
-	}
-	sort.Slice(accounts, func(i, j int) bool {
-		return accountIDLess(accounts[i].AccountID, accounts[j].AccountID)
-	})
-	return BSGroup{Total: g.Total, Accounts: accounts}
-}
-
-// accountIDLess는 "x12" 형태의 항목 ID를 숫자 기준으로 비교
-func accountIDLess(a, b string) bool {
-	na, aok := accountIDNumber(a)
-	nb, bok := accountIDNumber(b)
-	if aok && bok {
-		if na != nb {
-			return na < nb
-		}
-		return a < b
-	}
-	return a < b
-}
-
-// accountIDNumber는 항목 ID의 숫자 부분을 추출 ("x12" → 12)
-func accountIDNumber(id string) (int, bool) {
-	trimmed := strings.TrimLeftFunc(id, func(r rune) bool {
-		return r < '0' || r > '9'
-	})
-	if trimmed == "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(trimmed)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
-
-// parseReportAsBS는 report 응답 raw JSON을 BSResponse로 변환
-func (c *WhooingClient) parseReportAsBS(data []byte) (*BSResponse, error) {
-	var results reportResults
-	if err := parseResponseWithClient(c, data, &results); err != nil {
-		return nil, err
-	}
-	return &BSResponse{
-		Assets:      reportGroupToBSGroup(results.Aggregate.Assets),
-		Liabilities: reportGroupToBSGroup(results.Aggregate.Liabilities),
-	}, nil
 }
 
 // ─── 유연한 results 파싱 헬퍼 ─────────────────────────────────

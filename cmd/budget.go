@@ -114,7 +114,7 @@ func runBudgetSet(cfg *config.Config, args []string) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 // runBudgetBasicTotal는 장기목표용 월별 총액 일괄 수정
@@ -172,7 +172,7 @@ func runBudgetBasicTotal(cfg *config.Config, args []string) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 func runBudgetReset(cfg *config.Config, args []string) {
@@ -197,7 +197,7 @@ func runBudgetReset(cfg *config.Config, args []string) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 func showBudgetHelp() {
@@ -290,7 +290,7 @@ func runBudgetGoalSet(cfg *config.Config, args []string) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 func runBudgetGoalReset(cfg *config.Config) {
@@ -308,7 +308,7 @@ func runBudgetGoalReset(cfg *config.Config) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 func showBudgetGoalHelp() {
@@ -417,7 +417,7 @@ func runGoalSet(cfg *config.Config, args []string) {
 		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+	printJSON(data)
 }
 
 func showGoalHelp() {
@@ -431,10 +431,5 @@ func showGoalHelp() {
 // ─── 내부 헬퍼 ───────────────────────────────────────────────
 
 func printTypedJSON(v interface{}) {
-	out, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[오류] JSON 직렬화 실패: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(out))
+	printJSONValue(v)
 }
