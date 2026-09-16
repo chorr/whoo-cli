@@ -120,13 +120,13 @@ Go 1.22 이상이 필요합니다.
 
 ```bash
 cp .env.example .env
-# .env에 본인의 Whooing 앱 자격 증명 입력
+# WHOOING_APP_ID, WHOOING_APP_SECRET 입력 (WHOOING_PIN은 선택)
 
 make dev
 make check
 ```
 
-`.env`와 로컬 빌드 결과물은 Git에서 제외됩니다. 실제 앱 자격 증명과 인증 토큰을 커밋하지 마세요.
+`make`와 실행 시 `.env`를 읽어 자격 증명을 채웁니다. `.env`와 로컬 빌드 결과물은 Git에서 제외되므로 실제 값과 인증 토큰을 커밋하지 마세요.
 
 ## 지원 플랫폼
 
