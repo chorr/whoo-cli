@@ -364,16 +364,35 @@ func (c *WhooingClient) doRequestOnce(method, endpoint string, params url.Values
 	case http.StatusOK:
 		// 정상
 	case 429:
-		return nil, 429, &APIError{Code: 429, Message: "분당 요청 한도 초과", Endpoint: endpoint}
+		return nil, 429, &APIError{
+			Code: 429, Reason: reasonForStatus(429), Message: "분당 요청 한도 초과",
+			Endpoint: endpoint, Details: compactDetails(body), Verbose: c.config.Verbose,
+		}
 	case http.StatusPaymentRequired: // 402
-		return nil, 402, &APIError{Code: 402, Message: "일일 API 한도 초과", Endpoint: endpoint}
+		return nil, 402, &APIError{
+			Code: 402, Reason: reasonForStatus(402), Message: "일일 API 한도 초과",
+			Endpoint: endpoint, Details: compactDetails(body), Verbose: c.config.Verbose,
+		}
 	case http.StatusMethodNotAllowed: // 405
-		return nil, 405, &APIError{Code: 405, Message: "토큰이 만료되었습니다. 재인증이 필요합니다", Endpoint: endpoint}
+		return nil, 405, &APIError{
+			Code: 405, Reason: reasonForStatus(405), Message: "토큰이 만료되었습니다. 재인증이 필요합니다",
+			Endpoint: endpoint, Details: compactDetails(body), Verbose: c.config.Verbose,
+		}
 	default:
+		message := shortHTTPMessage(resp.StatusCode)
+		var apiResp APIResponse
+		if err := json.Unmarshal(body, &apiResp); err == nil &&
+			apiResp.Message != "" &&
+			!strings.Contains(strings.ToLower(apiResp.Message), "<html") {
+			message = apiResp.Message
+		}
 		return nil, resp.StatusCode, &APIError{
 			Code:     resp.StatusCode,
-			Message:  fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)),
+			Reason:   reasonForStatus(resp.StatusCode),
+			Message:  message,
 			Endpoint: endpoint,
+			Details:  compactDetails(body),
+			Verbose:  c.config.Verbose,
 		}
 	}
 
@@ -409,8 +428,12 @@ func parseResponseWithClient(c *WhooingClient, data []byte, target interface{}) 
 		if errMsg == "" || errMsg == "null" {
 			errMsg = "알 수 없는 오류"
 		}
+		if strings.Contains(strings.ToLower(errMsg), "<html") {
+			errMsg = shortHTTPMessage(apiResp.Code)
+		}
 		return &APIError{
 			Code:       apiResp.Code,
+			Reason:     reasonForStatus(apiResp.Code),
 			Message:    errMsg,
 			Parameters: apiResp.ErrorParameters,
 		}
@@ -551,8 +574,8 @@ func (c *WhooingClient) GetEntries(sectionID, startDate, endDate string, limit i
 }
 
 // GetBSRaw는 자산부채(Balance Sheet) 잔액 조회 (raw JSON, CLI용)
-// 레거시 bs.json 대체: GET /api/report/assets,liabilities.json?rows_type=none
-// start_date=end_date로 요청하면 aggregate가 기준일의 누적 잔액이 된다
+// 공식 report API를 assets/liabilities로 나눠 호출한 뒤 병합한다.
+// 콤마가 포함된 /report/assets,liabilities.json 경로의 WAF 403을 피한다.
 func (c *WhooingClient) GetBSRaw(sectionID, endDate string) ([]byte, error) {
 	return c.GetReportByAccount("assets,liabilities", ReportQuery{
 		SectionID: sectionID,
@@ -563,7 +586,6 @@ func (c *WhooingClient) GetBSRaw(sectionID, endDate string) ([]byte, error) {
 }
 
 // GetBS는 자산부채(Balance Sheet) 잔액 조회 (TUI용, 구조화 응답)
-// report 응답의 aggregate를 BSResponse로 변환한다
 func (c *WhooingClient) GetBS(sectionID, endDate string) (*BSResponse, error) {
 	data, err := c.GetBSRaw(sectionID, endDate)
 	if err != nil {

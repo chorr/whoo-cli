@@ -7,10 +7,28 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"whoo-cli/api"
 	"whoo-cli/config"
 )
+
+type flatAccount struct {
+	SectionID     string      `json:"section_id"`
+	AccountID     string      `json:"account_id"`
+	Title         string      `json:"title"`
+	Type          string      `json:"type"`
+	ItemType      string      `json:"item_type,omitempty"`
+	Category      string      `json:"category"`
+	Memo          string      `json:"memo"`
+	OpenDate      interface{} `json:"open_date,omitempty"`
+	CloseDate     interface{} `json:"close_date,omitempty"`
+	OpeningAmount float64     `json:"opening_amount,omitempty"`
+	Balance       *float64    `json:"balance,omitempty"`
+}
 
 // RunAccounts는 accounts CLI 커맨드 실행
 func RunAccounts(cfg *config.Config, args []string) {
@@ -22,11 +40,13 @@ func RunAccounts(cfg *config.Config, args []string) {
 	RequireSection(cfg)
 
 	if len(args) == 0 {
-		runAccountsList(cfg)
+		runAccountsList(cfg, nil)
 		return
 	}
 
 	switch args[0] {
+	case "list":
+		runAccountsList(cfg, args[1:])
 	case "add":
 		runAccountsAdd(cfg, args[1:])
 	case "edit":
@@ -38,9 +58,13 @@ func RunAccounts(cfg *config.Config, args []string) {
 	case "sort":
 		runAccountsSort(cfg, args[1:])
 	default:
+		if strings.HasPrefix(args[0], "-") {
+			runAccountsList(cfg, args)
+			return
+		}
 		account := args[0]
-		if len(args) == 1 {
-			runAccountsByType(cfg, account)
+		if len(args) == 1 || strings.HasPrefix(args[1], "-") {
+			runAccountsByType(cfg, account, args[1:])
 		} else {
 			runAccountByID(cfg, account, args[1])
 		}
@@ -48,8 +72,24 @@ func RunAccounts(cfg *config.Config, args []string) {
 }
 
 // runAccountsList는 전체 항목 목록 조회
-func runAccountsList(cfg *config.Config) {
+func runAccountsList(cfg *config.Config, args []string) {
+	fs := flag.NewFlagSet("accounts list", flag.ExitOnError)
+	flat := fs.Bool("flat", false, "compact 배열로 출력")
+	withBalance := fs.Bool("with-balance", false, "자산/부채 현재 잔액 포함 (--flat 자동)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
 	client := NewClient(cfg)
+	if *flat || *withBalance {
+		rows, err := loadFlatAccounts(client, cfg.SectionID, "", *withBalance)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSONValue(rows)
+		return
+	}
 	data, err := client.GetAccountsList(cfg.SectionID)
 	if err != nil {
 		PrintError("%v", err)
@@ -59,14 +99,113 @@ func runAccountsList(cfg *config.Config) {
 }
 
 // runAccountsByType은 계정별 항목 목록 조회
-func runAccountsByType(cfg *config.Config, account string) {
+func runAccountsByType(cfg *config.Config, account string, args []string) {
+	fs := flag.NewFlagSet("accounts "+account, flag.ExitOnError)
+	flat := fs.Bool("flat", false, "compact 배열로 출력")
+	withBalance := fs.Bool("with-balance", false, "현재 잔액 포함 (--flat 자동)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
 	client := NewClient(cfg)
+	if *flat || *withBalance {
+		rows, err := loadFlatAccounts(client, cfg.SectionID, account, *withBalance)
+		if err != nil {
+			PrintError("%v", err)
+			os.Exit(1)
+		}
+		printJSONValue(rows)
+		return
+	}
 	data, err := client.GetAccountsByType(cfg.SectionID, account)
 	if err != nil {
 		PrintError("%v", err)
 		os.Exit(1)
 	}
 	printJSON(data)
+}
+
+func loadFlatAccounts(
+	client *api.WhooingClient,
+	sectionID, accountFilter string,
+	withBalance bool,
+) ([]flatAccount, error) {
+	accounts, err := client.GetAccountsMap(sectionID)
+	if err != nil {
+		return nil, fmt.Errorf("항목 목록 조회 실패: %w", err)
+	}
+	rows := flattenAccounts(accounts, sectionID, accountFilter)
+	if !withBalance {
+		return rows, nil
+	}
+
+	bs, err := client.GetBS(sectionID, time.Now().Format("20060102"))
+	if err != nil {
+		return nil, fmt.Errorf("현재 잔액 조회 실패: %w", err)
+	}
+	balances := make(map[string]float64, len(bs.Assets.Accounts)+len(bs.Liabilities.Accounts))
+	for _, account := range bs.Assets.Accounts {
+		balances["assets:"+account.AccountID] = account.Money
+	}
+	for _, account := range bs.Liabilities.Accounts {
+		balances["liabilities:"+account.AccountID] = account.Money
+	}
+	for i := range rows {
+		if rows[i].Type != "assets" && rows[i].Type != "liabilities" {
+			continue
+		}
+		value := balances[rows[i].Type+":"+rows[i].AccountID]
+		rows[i].Balance = &value
+	}
+	return rows, nil
+}
+
+func flattenAccounts(accounts *api.AccountsMap, sectionID, accountFilter string) []flatAccount {
+	rows := make([]flatAccount, 0)
+	for _, accountType := range AccountTypes {
+		if accountFilter != "" && accountFilter != accountType.Code {
+			continue
+		}
+		for accountID, detail := range accounts.GetAccountsByType(accountType.Code) {
+			rows = append(rows, flatAccount{
+				SectionID:     sectionID,
+				AccountID:     accountID,
+				Title:         detail.Title,
+				Type:          accountType.Code,
+				ItemType:      detail.Type,
+				Category:      detail.Category,
+				Memo:          detail.Memo,
+				OpenDate:      detail.OpenDate,
+				CloseDate:     detail.CloseDate,
+				OpeningAmount: detail.OpeningAmount,
+			})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Type != rows[j].Type {
+			return accountTypeOrder(rows[i].Type) < accountTypeOrder(rows[j].Type)
+		}
+		return accountIDLess(rows[i].AccountID, rows[j].AccountID)
+	})
+	return rows
+}
+
+func accountTypeOrder(accountType string) int {
+	for i, candidate := range AccountTypes {
+		if candidate.Code == accountType {
+			return i
+		}
+	}
+	return len(AccountTypes)
+}
+
+func accountIDLess(a, b string) bool {
+	aNumber, aErr := strconv.Atoi(strings.TrimLeft(a, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+	bNumber, bErr := strconv.Atoi(strings.TrimLeft(b, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+	if aErr == nil && bErr == nil && aNumber != bNumber {
+		return aNumber < bNumber
+	}
+	return a < b
 }
 
 // runAccountByID는 특정 항목 상세 조회
@@ -292,8 +431,7 @@ func runAccountsExists(cfg *config.Config, args []string) {
 	}
 
 	// 구조화된 JSON 출력
-	out, _ := marshalPretty(result)
-	fmt.Println(string(out))
+	printJSONValue(result)
 }
 
 // runAccountsSort는 항목 순서 변경
@@ -332,10 +470,10 @@ func showAccountsHelp() {
 	fmt.Println("사용법: whoo accounts [command]")
 	fmt.Println()
 	fmt.Println("항목 메타(title, category, 사용기간)를 JSON으로 출력합니다.")
-	fmt.Println("잔액은 whoo bs, 기간 증감은 whoo inout 을 사용하세요.")
+	fmt.Println("현재 잔액은 whoo balance 또는 accounts --with-balance를 사용하세요.")
 	fmt.Println()
 	fmt.Println("커맨드:")
-	fmt.Println("  (없음)                              전체 항목 목록")
+	fmt.Println("  (없음), list                        전체 항목 목록")
 	fmt.Println("  add <type> --title <이름> [옵션...]  항목 생성")
 	fmt.Println("  edit <type> <account_id> [옵션...]  항목 수정")
 	fmt.Println("  delete <type> <account_id> [옵션]  항목 삭제")
@@ -346,6 +484,11 @@ func showAccountsHelp() {
 	fmt.Println("  help                                도움말")
 	fmt.Println()
 	fmt.Println("계정 타입: assets|liabilities|capital|expenses|income")
+	fmt.Println()
+	fmt.Println("목록 옵션:")
+	fmt.Println("  --flat          account_id/title/type/category/memo 표 형태")
+	fmt.Println("  --with-balance  자산/부채 현재 잔액 포함 (--flat 자동)")
+	fmt.Println("  --section       섹션 ID (전역 플래그)")
 	fmt.Println()
 	fmt.Println("accounts add 옵션:")
 	fmt.Println("  --title         항목 이름 (필수)")
@@ -364,7 +507,9 @@ func showAccountsHelp() {
 	fmt.Println()
 	fmt.Println("예시:")
 	fmt.Println("  whoo accounts assets")
-	fmt.Println("  whoo bs")
+	fmt.Println("  whoo accounts --flat")
+	fmt.Println("  whoo accounts assets --flat --with-balance")
+	fmt.Println("  whoo balance --account-id x2")
 	fmt.Println("  whoo inout --from 20260801 --to 20260813")
 	fmt.Println("  whoo accounts add assets --title \"토스\" --category normal")
 	fmt.Println("  whoo accounts add liabilities --title \"신한카드\" --category creditcard --opt-use-date pp1 --opt-pay-date 25 --opt-pay-account x2")

@@ -18,7 +18,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(os.Args) < 2 {
+	cliArgs, globalOptions, err := cmd.ParseGlobalOptions(cfg, os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[오류] %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(cliArgs) == 0 {
 		if !cmd.HasInteractiveTTY() {
 			fmt.Fprintln(os.Stderr, "[오류] TUI는 터미널(TTY)이 필요합니다")
 			fmt.Fprintln(os.Stderr, "")
@@ -31,8 +37,9 @@ func main() {
 		return
 	}
 
-	args := os.Args[2:]
-	switch os.Args[1] {
+	cmd.WarnSectionOverride(globalOptions, cliArgs)
+	args := cliArgs[1:]
+	switch cliArgs[0] {
 	case "auth", "login":
 		cmd.RunAuth(cfg, args)
 	case "user":
@@ -53,7 +60,7 @@ func main() {
 		cmd.RunMonthly(cfg, args)
 	case "inout", "io":
 		cmd.RunInOut(cfg, args)
-	case "bs":
+	case "bs", "balance":
 		cmd.RunBS(cfg, args)
 	case "report", "r":
 		cmd.RunReport(cfg, args)

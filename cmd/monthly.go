@@ -277,8 +277,7 @@ func runMonthlyPay(cfg *config.Config, args []string) {
 		PrintError("거래 생성 실패: %v", err)
 		os.Exit(1)
 	}
-	out, _ := marshalPretty(entry)
-	fmt.Println(string(out))
+	printJSONValue(entry)
 }
 
 type monthlyItemInfo struct {

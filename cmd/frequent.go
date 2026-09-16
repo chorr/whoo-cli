@@ -265,8 +265,7 @@ func runFrequentUse(cfg *config.Config, args []string) {
 		PrintError("거래 생성 실패: %v", err)
 		os.Exit(1)
 	}
-	out, _ := marshalPretty(entry)
-	fmt.Println(string(out))
+	printJSONValue(entry)
 }
 
 // frequentItemInfo는 frequent use에서 필요한 항목 정보
