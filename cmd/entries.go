@@ -241,6 +241,8 @@ func runEntriesUpdate(cfg *config.Config, args []string) {
 		os.Exit(1)
 	}
 
+	provided := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
 	fields := make(map[string]string)
 	if *lAccount != "" {
 		fields["l_account"] = *lAccount
@@ -253,10 +255,10 @@ func runEntriesUpdate(cfg *config.Config, args []string) {
 	if *money != "" {
 		fields["money"] = *money
 	}
-	if *item != "" {
+	if provided["item"] {
 		fields["item"] = *item
 	}
-	if *memo != "" {
+	if provided["memo"] {
 		fields["memo"] = *memo
 	}
 	if *date != "" {
@@ -283,6 +285,8 @@ func runEntriesUpdate(cfg *config.Config, args []string) {
 			RAccountID: *rID,
 			Item:       *item,
 			Memo:       *memo,
+			ItemSet:    provided["item"],
+			MemoSet:    provided["memo"],
 		}
 		if *money != "" {
 			mv, err := strconv.ParseInt(*money, 10, 64)

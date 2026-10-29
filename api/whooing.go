@@ -27,6 +27,7 @@ const (
 type WhooingClient struct {
 	config         *config.Config
 	httpClient     *http.Client
+	retryWait      func(time.Duration)
 	cache          TTLCache
 	lastRestOfAPI  int64 // atomic 접근용
 	bucketMu       sync.Mutex
@@ -225,6 +226,7 @@ func NewWhooingClient(cfg *config.Config) *WhooingClient {
 		},
 		bucketTokens:   bucketMax,
 		bucketRefillAt: time.Now().Add(bucketInterval),
+		retryWait:      time.Sleep,
 	}
 }
 
@@ -302,15 +304,17 @@ func (c *WhooingClient) doRequest(method, endpoint string, params url.Values) ([
 			case apiErr.IsDailyLimit(): // 402: 재시도 금지, 즉시 반환
 				return nil, apiErr
 			case apiErr.IsRateLimit(): // 429: 3초 대기 후 재시도
-				time.Sleep(3 * time.Second)
 				lastErr = err
+				if attempt < maxRetries-1 {
+					c.retryWait(3 * time.Second)
+				}
 				continue
 			}
 		}
 
 		// HTTP 500: 3초 대기 후 1회 재시도
 		if statusCode == http.StatusInternalServerError && attempt == 0 {
-			time.Sleep(3 * time.Second)
+			c.retryWait(3 * time.Second)
 			lastErr = err
 			continue
 		}

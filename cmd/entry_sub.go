@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,10 +18,20 @@ import (
 	"whoo-cli/config"
 )
 
+// entryClient는 거래 입력 화면에서 사용하는 API 계약이다.
+type entryClient interface {
+	GetAccountsMap(sectionID string) (*api.AccountsMap, error)
+	CreateEntry(
+		sectionID, entryDate, lAccount, lAccountID, rAccount, rAccountID, item, memo string,
+		money float64,
+	) (*api.Entry, error)
+	UpdateEntry(sectionID string, entryID int, fields map[string]string) (*api.Entry, error)
+}
+
 // entrySubModel은 거래 입력 서브 모델
 type entrySubModel struct {
 	cfg         *config.Config
-	client      *api.WhooingClient
+	client      entryClient
 	accountsMap *api.AccountsMap
 	step        int
 	err         error
@@ -46,6 +57,7 @@ type entrySubModel struct {
 	cursor    int
 	choices   []accountChoice
 	done      bool
+	saving    bool
 	cancelled bool
 	inputHint string // 입력 검증 안내 (API 에러와 분리)
 }
@@ -221,20 +233,26 @@ func (m *entrySubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case entryCreatedMsg:
+		m.saving = false
 		m.step = entryStepDone
 		m.done = true
 		return m, nil
 
 	case entryUpdatedMsg:
+		m.saving = false
 		m.step = entryStepDone
 		m.done = true
 		return m, nil
 
 	case entryErrMsg:
+		m.saving = false
 		m.err = msg.err
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.saving {
+			return m, nil
+		}
 		// 에러 상태에서는 Enter/Esc로 상위 화면 복귀
 		if m.err != nil {
 			if msg.String() == "enter" || msg.String() == "esc" {
@@ -422,6 +440,7 @@ func (m *entrySubModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		// 확인 (Y가 기본값)
+		m.saving = true
 		if m.editMode {
 			return m, m.updateEntry()
 		}
@@ -461,7 +480,7 @@ func (m *entrySubModel) submitMoney() {
 	}
 	cleaned := strings.ReplaceAll(input, ",", "")
 	amount, err := strconv.ParseFloat(cleaned, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		m.inputHint = "올바른 금액을 입력하세요"
 		return
 	}
@@ -599,8 +618,10 @@ func (m *entrySubModel) renderDone() string {
 	money, _ := strconv.ParseFloat(m.money, 64)
 
 	label := "거래가 등록되었습니다"
+	back := "메뉴로 돌아가기"
 	if m.editMode {
 		label = "거래가 수정되었습니다"
+		back = "거래내역으로 돌아가기"
 	}
 
 	return titleStyle.Render("거래 입력") + "\n\n" +
@@ -612,7 +633,7 @@ func (m *entrySubModel) renderDone() string {
 			FormatMoney(money),
 			m.item,
 		) + "\n" +
-		helpStyle.Render("[Enter] 메뉴로 돌아가기")
+		helpStyle.Render("[Enter] "+back)
 }
 
 func (m *entrySubModel) renderForm() string {
@@ -721,6 +742,10 @@ func (m *entrySubModel) renderForm() string {
 			b.WriteString(fmt.Sprintf("  메모: %s\n", m.memo))
 		}
 		b.WriteString("\n")
+		if m.saving {
+			b.WriteString("저장 중...")
+			break
+		}
 		if m.editMode {
 			b.WriteString("수정하시겠습니까? (Y/n): ")
 		} else {

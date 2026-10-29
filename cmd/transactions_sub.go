@@ -19,13 +19,24 @@ import (
 
 const pageSize = 20
 
+// transactionsClient는 거래 조회 화면에서 사용하는 API 계약이다.
+type transactionsClient interface {
+	GetEntries(sectionID, startDate, endDate string, limit int, cursor string) ([]api.Entry, error)
+	GetAccountsMap(sectionID string) (*api.AccountsMap, error)
+	DeleteEntry(sectionID string, entryID int) error
+}
+
 // 범위 선택 프리셋 목록
 var rangePresets = []string{"이번 달", "지난 달", "최근 3개월", "직접 입력"}
 
 // calcDateRange는 프리셋 인덱스에 따라 시작일/종료일 반환
 // 월말(3/31 등)에서도 달 경계가 깨지지 않도록 항상 해당 월 1일 기준으로 계산한다
 func calcDateRange(preset int) (string, string) {
-	now := time.Now()
+	return calcDateRangeAt(preset, time.Now())
+}
+
+// calcDateRangeAt은 기준 시각을 받아 월말과 윤년의 날짜 범위를 계산한다.
+func calcDateRangeAt(preset int, now time.Time) (string, string) {
 	thisMonth := firstOfMonth(now)
 	switch preset {
 	case 0: // 이번 달
@@ -71,7 +82,7 @@ func validateDateInput(startStr, endStr string) error {
 // transactionsSubModel은 거래내역 조회 서브 모델
 type transactionsSubModel struct {
 	cfg           *config.Config
-	client        *api.WhooingClient
+	client        transactionsClient
 	entries       []api.Entry
 	accountsMap   *api.AccountsMap
 	startDate     string
@@ -85,10 +96,10 @@ type transactionsSubModel struct {
 	confirmDelete bool
 	deleting      bool
 	deleteErr     error
-	hasMore       bool // 추가 데이터 존재 여부
-	loadingMore   bool // 더보기 로딩 중
-	rangeMode     bool // 범위 선택 모드
-	rangeCursor   int  // 범위 선택 커서 (0~3)
+	hasMore       bool            // 추가 데이터 존재 여부
+	loadingMore   bool            // 더보기 로딩 중
+	rangeMode     bool            // 범위 선택 모드
+	rangeCursor   int             // 범위 선택 커서 (0~3)
 	customInput   bool            // 직접 입력 모드
 	inputField    int             // 0: 시작일, 1: 종료일
 	startInput    textinput.Model // 시작일 입력
@@ -268,10 +279,14 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 삭제 중 상태
 	if m.deleting {
 		switch msg.(type) {
+		case tea.KeyMsg:
+			return m, nil
 		case transactionDeletedMsg:
 			m.deleting = false
 			m.deleteErr = nil
 			// 데이터 재조회
+			m.loading = true
+			m.tableReady = false
 			return m, m.fetchEntries()
 		case transactionDeleteErrMsg:
 			m.deleting = false
@@ -449,7 +464,6 @@ func (m *transactionsSubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-
 
 	case transactionsLoadedMsg:
 		m.entries = msg.entries
