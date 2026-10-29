@@ -20,12 +20,16 @@ const (
 
 // OAuth는 후잉 OAuth 인증을 처리하는 구조체
 type OAuth struct {
-	config *config.Config
+	config     *config.Config
+	httpClient *http.Client
 }
 
 // NewOAuth는 새 OAuth 인스턴스 생성
 func NewOAuth(cfg *config.Config) *OAuth {
-	return &OAuth{config: cfg}
+	return &OAuth{
+		config:     cfg,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 // RequestTokenResponse는 1단계 요청 토큰 응답
@@ -60,8 +64,7 @@ func (o *OAuth) RequestToken() (*RequestTokenResponse, error) {
 	q.Set("app_secret", appSecret)
 	reqURL := fmt.Sprintf("%s/app_auth/request_token?%s", baseURL, q.Encode())
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(reqURL)
+	resp, err := o.httpClient.Get(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("토큰 요청 실패: %w", err)
 	}
@@ -125,8 +128,7 @@ func (o *OAuth) ExchangeToken(tempToken, signiture, pin string) (*AccessTokenRes
 	q.Set("pin", pin)
 	reqURL := fmt.Sprintf("%s/app_auth/access_token?%s", baseURL, q.Encode())
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(reqURL)
+	resp, err := o.httpClient.Get(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("토큰 교환 실패: %w", err)
 	}

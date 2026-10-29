@@ -205,6 +205,10 @@ func (c *Config) Save() error {
 		return fmt.Errorf("설정 직렬화 실패: %w", err)
 	}
 
+	// 기존 파일에도 새 토큰을 쓰기 전에 소유자 전용 권한을 적용한다.
+	if err := os.Chmod(configPath, 0600); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("설정 파일 권한 변경 실패: %w", err)
+	}
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("설정 파일 저장 실패: %w", err)
 	}

@@ -128,6 +128,8 @@ make check
 
 `make`와 실행 시 `.env`를 읽어 자격 증명을 채웁니다. `.env`와 로컬 빌드 결과물은 Git에서 제외되므로 실제 값과 인증 토큰을 커밋하지 마세요.
 
+테스트는 실제 후잉 API나 자격 증명 없이 실행합니다. `make test`는 단위 테스트, `make test-race`는 경쟁 상태와 실행 순서, `make test-integration`은 실제 CLI 실행을 검증합니다. 커버리지는 `make test-cover`로 확인합니다. 테스트를 먼저 작성하는 절차는 [테스트 개발 안내](docs/testing.md)를 참고하세요.
+
 ## 지원 플랫폼
 
 | OS | Architecture |

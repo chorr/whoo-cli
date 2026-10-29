@@ -18,9 +18,9 @@ func TestApplyDotEnvFile(t *testing.T) {
 	}
 
 	t.Setenv("ALREADY_SET", "shell-value")
-	// clear targets so file can fill them
-	_ = os.Unsetenv("WHOOING_APP_ID")
-	_ = os.Unsetenv("WHOOING_APP_SECRET")
+	// 파일에서 채운 값과 기존 환경변수를 테스트 종료 시 함께 복원한다.
+	t.Setenv("WHOOING_APP_ID", "")
+	t.Setenv("WHOOING_APP_SECRET", "")
 
 	if err := applyDotEnvFile(path); err != nil {
 		t.Fatal(err)

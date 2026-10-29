@@ -8,6 +8,8 @@ import (
 )
 
 func TestParseGlobalOptionsPrecedence(t *testing.T) {
+	before := outputSectionID
+	t.Cleanup(func() { SetOutputSection(before) })
 	t.Setenv("WHOO_SECTION", "s-env")
 	cfg := &config.Config{SectionID: "s-config"}
 
@@ -33,6 +35,8 @@ func TestParseGlobalOptionsPrecedence(t *testing.T) {
 }
 
 func TestParseGlobalOptionsUsesEnvironment(t *testing.T) {
+	before := outputSectionID
+	t.Cleanup(func() { SetOutputSection(before) })
 	t.Setenv("WHOO_SECTION", "s-env")
 	cfg := &config.Config{SectionID: "s-config"}
 
@@ -54,8 +58,9 @@ func TestParseGlobalOptionsRequiresSectionValue(t *testing.T) {
 }
 
 func TestAddOutputSection(t *testing.T) {
+	before := outputSectionID
 	SetOutputSection("s-test")
-	t.Cleanup(func() { SetOutputSection("") })
+	t.Cleanup(func() { SetOutputSection(before) })
 
 	object := map[string]interface{}{"code": 200}
 	addOutputSection(object)

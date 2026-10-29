@@ -26,7 +26,8 @@ type EntryInput struct {
 	AttachmentIDs string `json:"attachment_ids,omitempty"`
 }
 
-// EntryChanges는 복수 거래 일괄 수정 시 변경할 필드 (비어있는 필드는 미전송)
+// EntryChanges는 복수 거래 일괄 수정 시 변경할 필드다.
+// ItemSet과 MemoSet을 지정하면 빈 문자열도 전송해 기존 값을 지운다.
 type EntryChanges struct {
 	EntryDate  int
 	LAccount   string
@@ -36,6 +37,8 @@ type EntryChanges struct {
 	Item       string
 	Money      int64
 	Memo       string
+	ItemSet    bool
+	MemoSet    bool
 }
 
 // EntrySearch는 고급 검색 파라미터
@@ -203,6 +206,9 @@ func (c *WhooingClient) CreateEntriesBatch(sectionID string, rows []EntryInput) 
 		if err != nil {
 			return nil, fmt.Errorf("일괄입력 실패 (chunk %d~%d): %w", i, end-1, err)
 		}
+		if err := parseResponseWithClient(c, data, nil); err != nil {
+			return nil, fmt.Errorf("일괄입력 실패 (chunk %d~%d): %w", i, end-1, err)
+		}
 		lastData = data
 	}
 	return lastData, nil
@@ -229,17 +235,24 @@ func (c *WhooingClient) UpdateEntriesBatch(sectionID string, ids []int64, change
 		params.Set("r_account", changes.RAccount)
 		params.Set("r_account_id", changes.RAccountID)
 	}
-	if changes.Item != "" {
+	if changes.Item != "" || changes.ItemSet {
 		params.Set("item", changes.Item)
 	}
 	if changes.Money > 0 {
 		params.Set("money", fmt.Sprintf("%d", changes.Money))
 	}
-	if changes.Memo != "" {
+	if changes.Memo != "" || changes.MemoSet {
 		params.Set("memo", changes.Memo)
 	}
 
-	return c.doRequest(http.MethodPut, endpoint, params)
+	data, err := c.doRequest(http.MethodPut, endpoint, params)
+	if err != nil {
+		return nil, err
+	}
+	if err := parseResponseWithClient(c, data, nil); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // DeleteEntries는 최대 100건 복수 삭제
@@ -250,7 +263,14 @@ func (c *WhooingClient) DeleteEntries(sectionID string, ids []int64) ([]byte, er
 		idStrs[i] = fmt.Sprintf("%d", id)
 	}
 	endpoint := fmt.Sprintf("/entries/%s/%s.json", strings.Join(idStrs, ","), sectionID)
-	return c.doRequest(http.MethodDelete, endpoint, nil)
+	data, err := c.doRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := parseResponseWithClient(c, data, nil); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // ─── 고급 검색 ────────────────────────────────────────────────
