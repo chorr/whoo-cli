@@ -13,7 +13,7 @@ make test-cover        # coverage.out 생성과 함수별 커버리지
 go tool cover -html=coverage.out
 ```
 
-PR과 브랜치 push에서는 Go 1.22와 최신 안정 버전으로 vet, race 검사, 커버리지 측정, CLI 통합 테스트를 실행합니다. 태그 릴리스와는 별개 워크플로입니다.
+PR과 `main` 브랜치 push에서는 Go 1.22와 최신 안정 버전으로 vet, race 검사, 커버리지 측정, CLI 통합 테스트를 실행합니다. 작업 브랜치 push는 별도로 검증하지 않아 PR과의 중복 실행을 피합니다. 같은 PR이나 `main`에 새 커밋이 올라오면 이전에 진행 중이던 검증을 취소합니다. 태그 릴리스와는 별개 워크플로입니다.
 
 ## TDD 순서
 
